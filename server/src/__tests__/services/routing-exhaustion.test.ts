@@ -72,29 +72,20 @@ describe('Routing Key Exhaustion', () => {
     expect(ratelimit.canMakeRequest).toHaveBeenCalled();
   });
 
-  it('should fallback to Flash model only if BOTH Key A and Key B are exhausted for Pro', () => {
-    const db = getDb();
-    const proId = db.prepare("SELECT id FROM models WHERE model_id = 'gemini-1.5-pro'").get().id;
-    const keys = db.prepare("SELECT id FROM api_keys").all();
-
-    // Mock behavior: Both keys for Google are exhausted
+  it('should throw 429 when every key on every model is exhausted', () => {
     (ratelimit.canMakeRequest as any).mockReturnValue(false);
+    expect(() => routeRequest(100)).toThrow(/All models exhausted/);
+  });
 
-    // Act: Route request
-    const result = routeRequest(100);
-
-    // Assert: Pro is exhausted, so it must fall back to Flash
-    // (Note: Flash will also fail in this mock because canMakeRequest returns false for everything, 
-    // but the router will try it. In reality, it would throw 429 if ALL are exhausted)
-    
-    // Let's adjust mock to allow Flash but not Pro
-    (ratelimit.canMakeRequest as any).mockImplementation((platform, modelId, keyId) => {
+  it('should fall back to Flash when Pro is exhausted but Flash has quota', () => {
+    (ratelimit.canMakeRequest as any).mockImplementation((_platform: string, modelId: string) => {
       if (modelId === 'gemini-1.5-pro') return false;
       if (modelId === 'gemini-1.5-flash') return true;
       return true;
     });
+    (ratelimit.canUseTokens as any).mockReturnValue(true);
 
-    const result2 = routeRequest(100);
-    expect(result2.modelId).toBe('gemini-1.5-flash');
+    const result = routeRequest(100);
+    expect(result.modelId).toBe('gemini-1.5-flash');
   });
 });
