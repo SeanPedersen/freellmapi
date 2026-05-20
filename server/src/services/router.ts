@@ -54,6 +54,43 @@ const SLOW_SPEED_PENALTY_WEIGHT = 0.35;
 // At max penalty (10) a perfect model drops ~0.5 — into the neutral range.
 export const PENALTY_SCORE_WEIGHT = 0.05;
 
+// ── TTFB scoring ─────────────────────────────────────────────────────────────
+// Weight of the TTFB signal. At its best (+1.0 raw) this adds 0.25 to the score;
+// at its worst (>2 s) it subtracts ~0.075, actively discouraging slow models.
+const TTFB_WEIGHT = 0.25;
+
+// Thresholds (ms) that define the four quality bands.
+const TTFB_VERY_GOOD_MS = 500;
+const TTFB_GOOD_MS      = 1000;
+const TTFB_ACCEPTABLE_MS = 2000;
+
+// Optimistic prior for models with no TTFB measurements yet — slightly below
+// "good" so they get a fair chance to prove themselves via exploration.
+const TTFB_PRIOR = 0.75;
+
+// Returns a normalized score in [~-0.3, 1.0] for a given average TTFB.
+//   < 500 ms  → 1.0  (very good)
+//   500–1000  → 1.0 → 0.6  (good, linear)
+//   1000–2000 → 0.6 → 0.0  (ok, linear)
+//   > 2000 ms → -0.3  (bad — active penalty to route away)
+function ttfbRawScore(avgTtfbMs: number): number {
+  if (avgTtfbMs < TTFB_VERY_GOOD_MS) return 1.0;
+  if (avgTtfbMs < TTFB_GOOD_MS) {
+    return 1.0 - 0.4 * (avgTtfbMs - TTFB_VERY_GOOD_MS) / (TTFB_GOOD_MS - TTFB_VERY_GOOD_MS);
+  }
+  if (avgTtfbMs < TTFB_ACCEPTABLE_MS) {
+    return 0.6 - 0.6 * (avgTtfbMs - TTFB_GOOD_MS) / (TTFB_ACCEPTABLE_MS - TTFB_GOOD_MS);
+  }
+  return -0.3;
+}
+
+// Returns the weighted TTFB contribution to the routing score.
+// null → optimistic prior (exploration for new/unseen models).
+function ttfbContribution(avgTtfbMs: number | null): number {
+  const raw = avgTtfbMs !== null ? ttfbRawScore(avgTtfbMs) : TTFB_PRIOR;
+  return TTFB_WEIGHT * raw;
+}
+
 // Returns the combined speed term (reward − slow penalty) for a model with data.
 // Slow models (below MIN_USEFUL_TOK_S) score negatively relative to no-data baseline.
 function speedContribution(tokPerSec: number, maxTokPerSec: number): number {
@@ -95,7 +132,8 @@ function sampleBeta(alpha: number, beta: number): number {
 interface ModelStats {
   successes: number;
   total: number;
-  tokPerSec: number; // output tok/s from successful requests only
+  tokPerSec: number;    // output tok/s from successful requests only
+  avgTtfbMs: number | null; // avg TTFB across successful requests (null if no data)
 }
 
 let statsCache: Map<string, ModelStats> | null = null;
@@ -115,11 +153,15 @@ export function refreshStatsCache(db: Database, force = false): void {
         THEN SUM(CASE WHEN status = 'success' THEN output_tokens ELSE 0 END) * 1000.0
              / SUM(CASE WHEN status = 'success' THEN latency_ms ELSE 0 END)
         ELSE 0
-      END as tok_per_sec
+      END as tok_per_sec,
+      AVG(CASE WHEN status = 'success' AND ttfb_ms IS NOT NULL THEN ttfb_ms END) as avg_ttfb_ms
     FROM requests
     WHERE created_at >= ?
     GROUP BY platform, model_id
-  `).all(since) as Array<{ platform: string; model_id: string; total: number; successes: number; tok_per_sec: number }>;
+  `).all(since) as Array<{
+    platform: string; model_id: string; total: number; successes: number;
+    tok_per_sec: number; avg_ttfb_ms: number | null;
+  }>;
 
   statsCache = new Map();
   maxTokPerSec = 0;
@@ -128,6 +170,7 @@ export function refreshStatsCache(db: Database, force = false): void {
       successes: row.successes,
       total: row.total,
       tokPerSec: row.tok_per_sec,
+      avgTtfbMs: row.avg_ttfb_ms ?? null,
     });
     if (row.tok_per_sec > maxTokPerSec) maxTokPerSec = row.tok_per_sec;
   }
@@ -144,7 +187,11 @@ export function getAnalyticsScore(platform: string, modelId: string): number {
   const speed = (stats && stats.tokPerSec > 0)
     ? speedContribution(stats.tokPerSec, maxTokPerSec)
     : 0;
-  return bayesRate + speed;
+  // No data → no TTFB contribution for display score (avoid misleading the dashboard)
+  const ttfbScore = (stats && stats.avgTtfbMs !== null)
+    ? ttfbContribution(stats.avgTtfbMs)
+    : 0;
+  return bayesRate + speed + ttfbScore;
 }
 
 // Stochastic score used for routing — samples from the Beta posterior so that
@@ -157,7 +204,9 @@ function thompsonSampleScore(platform: string, modelId: string): number {
   const speed = (stats && stats.tokPerSec > 0)
     ? speedContribution(stats.tokPerSec, maxTokPerSec)
     : SPEED_WEIGHT * SPEED_PRIOR;
-  return sampleBeta(alpha, beta) + speed;
+  // No data → TTFB_PRIOR (optimistic, encourages exploration of unseen models)
+  const ttfbScore = ttfbContribution(stats?.avgTtfbMs ?? null);
+  return sampleBeta(alpha, beta) + speed + ttfbScore;
 }
 
 /**
@@ -171,6 +220,7 @@ export function getAnalyticsScores(): Array<{
   successRate: number;
   total: number;
   tokPerSec: number;
+  avgTtfbMs: number | null;
 }> {
   if (!statsCache) return [];
   const result: Array<{
@@ -180,6 +230,7 @@ export function getAnalyticsScores(): Array<{
     successRate: number;
     total: number;
     tokPerSec: number;
+    avgTtfbMs: number | null;
   }> = [];
   for (const [key, stats] of statsCache) {
     const [platform, ...rest] = key.split(':');
@@ -191,6 +242,7 @@ export function getAnalyticsScores(): Array<{
       successRate: stats.total > 0 ? stats.successes / stats.total : 0,
       total: stats.total,
       tokPerSec: stats.tokPerSec,
+      avgTtfbMs: stats.avgTtfbMs,
     });
   }
   return result.sort((a, b) => b.score - a.score);

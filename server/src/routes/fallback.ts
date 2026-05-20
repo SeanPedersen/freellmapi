@@ -44,6 +44,7 @@ fallbackRouter.get('/', (_req: Request, res: Response) => {
       successRate: analytics ? Math.round(analytics.successRate * 1000) / 10 : null,
       totalRequests: analytics?.total ?? 0,
       tokPerSec: analytics ? Math.round(analytics.tokPerSec * 10) / 10 : null,
+      avgTtfbMs: analytics?.avgTtfbMs != null ? Math.round(analytics.avgTtfbMs) : null,
       enabled: r.enabled === 1,
       platform: r.platform,
       modelId: r.model_id,
