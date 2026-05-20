@@ -12,6 +12,7 @@ interface FallbackEntry {
   successRate: number | null
   totalRequests: number
   tokPerSec: number | null
+  avgTtfbMs: number | null
   enabled: boolean
   platform: string
   modelId: string
@@ -156,6 +157,18 @@ function ModelRow({
             {entry.tokPerSec !== null ? entry.tokPerSec : <span className="text-muted-foreground">—</span>}
           </div>
           <div className="text-xs text-muted-foreground">tok/s</div>
+        </div>
+        <div className="text-right w-20">
+          <div className={`text-sm font-mono tabular-nums ${
+            entry.avgTtfbMs === null ? 'text-muted-foreground' :
+            entry.avgTtfbMs < 500  ? 'text-green-600 dark:text-green-400' :
+            entry.avgTtfbMs < 1000 ? 'text-emerald-600 dark:text-emerald-400' :
+            entry.avgTtfbMs < 2000 ? 'text-yellow-600 dark:text-yellow-400' :
+                                     'text-red-600 dark:text-red-400'
+          }`}>
+            {entry.avgTtfbMs !== null ? `${entry.avgTtfbMs}ms` : '—'}
+          </div>
+          <div className="text-xs text-muted-foreground">TTFB</div>
         </div>
         <div className="text-right w-16">
           <div className="text-sm font-mono tabular-nums text-muted-foreground">{entry.score.toFixed(3)}</div>
