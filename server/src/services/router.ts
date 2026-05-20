@@ -7,7 +7,6 @@ import type { Database } from 'better-sqlite3';
 
 interface ChainRow {
   model_db_id: number;
-  priority: number;
   platform: string;
   model_id: string;
   display_name: string;
@@ -27,39 +26,71 @@ interface KeyRow {
   enabled: number;
 }
 
-// ── Analytics-based routing ────────────────────────────────────────────────
-// Bayesian success rate + UCB exploration so the router prefers models that
-// historically succeed while still probing lesser-known ones.
+// ── Thompson Sampling routing ──────────────────────────────────────────────
+// For each request, sample a success-rate from each model's Beta posterior.
+// Better models win more often but not exclusively — exploration is automatic
+// and proportional to uncertainty, without degenerating into a single winner.
 
-const ANALYTICS_WINDOW_MS = 24 * 60 * 60 * 1000; // look-back window for stats
-const ANALYTICS_CACHE_TTL_MS = 60 * 1000;         // re-query at most once per minute
+const ANALYTICS_WINDOW_MS = 24 * 60 * 60 * 1000;
+const ANALYTICS_CACHE_TTL_MS = 60 * 1000;
 
-// Beta prior: equivalent to having seen PRIOR_TOTAL observations with a 50% rate.
-// Ensures models with no history get a neutral score rather than being ranked
-// as perfect or terrible.
+// Beta prior: Beta(PRIOR_SUCCESS, PRIOR_FAILURE) — equivalent to 4 prior
+// observations at 50 % success. New models start neutral, not perfect or broken.
 const PRIOR_SUCCESS = 2;
-const PRIOR_TOTAL = 4;
+const PRIOR_FAILURE = 2;
 
-// UCB exploration constant. Scales the bonus that pulls under-sampled models up.
-const EXPLORE_FACTOR = 0.15;
-
-// Weight of the normalized speed signal relative to the success-rate signal.
-// Success rate is the primary gate (broken models must not be chosen); speed
-// is secondary — a fast model with equal reliability should win.
+// Weight of the normalized speed signal added on top of the sampled success rate.
 const SPEED_WEIGHT = 0.3;
 
 // Optimistic speed prior for models with no successful history yet.
-// UCB principle: be optimistic under uncertainty — assume as fast as the fastest
-// known model until data proves otherwise. Using 0.5 (pessimistic) was penalising
-// untested models and preventing them from ever being tried.
 const SPEED_PRIOR = 1.0;
 
-// Maximum positions analytics can shift a model up or down from its configured
-// base priority. Keeping this small ensures analytics is a soft tie-breaker
-// rather than a winner-takes-all override. Without a cap, a model with even a
-// slight track record advantage gets scaled by the full chain length (~50) and
-// permanently locks out every competitor.
-const ANALYTICS_SHIFT_CAP = 5;
+// Models below this tok/s threshold get an active penalty, not just a low reward.
+const MIN_USEFUL_TOK_S = 10;
+// Penalty weight applied proportionally to how far below the threshold the model is.
+const SLOW_SPEED_PENALTY_WEIGHT = 0.35;
+
+// How much each rate-limit penalty point reduces the effective score.
+// At max penalty (10) a perfect model drops ~0.5 — into the neutral range.
+export const PENALTY_SCORE_WEIGHT = 0.05;
+
+// Returns the combined speed term (reward − slow penalty) for a model with data.
+// Slow models (below MIN_USEFUL_TOK_S) score negatively relative to no-data baseline.
+function speedContribution(tokPerSec: number, maxTokPerSec: number): number {
+  if (maxTokPerSec <= 0 || tokPerSec <= 0) return 0;
+  const reward = SPEED_WEIGHT * (tokPerSec / maxTokPerSec);
+  const penalty = tokPerSec < MIN_USEFUL_TOK_S
+    ? SLOW_SPEED_PENALTY_WEIGHT * (1 - tokPerSec / MIN_USEFUL_TOK_S)
+    : 0;
+  return reward - penalty;
+}
+
+// ── Beta distribution sampler (Marsaglia & Tsang via two Gamma draws) ─────
+
+function randomNormal(): number {
+  const u1 = Math.random() || Number.EPSILON;
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * Math.random());
+}
+
+function sampleGamma(shape: number): number {
+  if (shape < 1) return sampleGamma(shape + 1) * Math.pow(Math.random() || Number.EPSILON, 1 / shape);
+  const d = shape - 1 / 3;
+  const c = 1 / Math.sqrt(9 * d);
+  for (;;) {
+    let x: number, v: number;
+    do { x = randomNormal(); v = 1 + c * x; } while (v <= 0);
+    v = v ** 3;
+    const u = Math.random();
+    if (u < 1 - 0.0331 * x ** 4) return d * v;
+    if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
+  }
+}
+
+function sampleBeta(alpha: number, beta: number): number {
+  const x = sampleGamma(alpha);
+  const y = sampleGamma(beta);
+  return x / (x + y);
+}
 
 interface ModelStats {
   successes: number;
@@ -69,11 +100,10 @@ interface ModelStats {
 
 let statsCache: Map<string, ModelStats> | null = null;
 let statsCacheTime = 0;
-let totalGlobalRequests = 0;
-let maxTokPerSec = 0; // normalisation denominator for speed scores
+let maxTokPerSec = 0;
 
-function refreshStatsCache(db: Database): void {
-  if (statsCache && Date.now() - statsCacheTime < ANALYTICS_CACHE_TTL_MS) return;
+export function refreshStatsCache(db: Database, force = false): void {
+  if (!force && statsCache && Date.now() - statsCacheTime < ANALYTICS_CACHE_TTL_MS) return;
 
   const since = new Date(Date.now() - ANALYTICS_WINDOW_MS).toISOString();
   const rows = db.prepare(`
@@ -92,7 +122,6 @@ function refreshStatsCache(db: Database): void {
   `).all(since) as Array<{ platform: string; model_id: string; total: number; successes: number; tok_per_sec: number }>;
 
   statsCache = new Map();
-  totalGlobalRequests = 0;
   maxTokPerSec = 0;
   for (const row of rows) {
     statsCache.set(`${row.platform}:${row.model_id}`, {
@@ -100,29 +129,35 @@ function refreshStatsCache(db: Database): void {
       total: row.total,
       tokPerSec: row.tok_per_sec,
     });
-    totalGlobalRequests += row.total;
     if (row.tok_per_sec > maxTokPerSec) maxTokPerSec = row.tok_per_sec;
   }
   statsCacheTime = Date.now();
 }
 
-function getAnalyticsScore(platform: string, modelId: string): number {
+// Deterministic expected score — used by the dashboard to rank models for display.
+export function getAnalyticsScore(platform: string, modelId: string): number {
   const stats = statsCache?.get(`${platform}:${modelId}`);
   const total = stats?.total ?? 0;
   const successes = stats?.successes ?? 0;
+  const bayesRate = (successes + PRIOR_SUCCESS) / (total + PRIOR_SUCCESS + PRIOR_FAILURE);
+  // No data → no speed contribution; SPEED_PRIOR is for routing exploration only
+  const speed = (stats && stats.tokPerSec > 0)
+    ? speedContribution(stats.tokPerSec, maxTokPerSec)
+    : 0;
+  return bayesRate + speed;
+}
 
-  const bayesRate = (successes + PRIOR_SUCCESS) / (total + PRIOR_TOTAL);
-  // UCB bonus: large when model is rarely observed, shrinks with more data
-  const explorationBonus = EXPLORE_FACTOR * Math.sqrt(Math.log(totalGlobalRequests + 1) / (total + 1));
-  const successScore = bayesRate + explorationBonus;
-
-  // Normalise speed to [0, 1] relative to the fastest observed model.
-  // Falls back to a neutral prior when no successful data exists yet.
-  const speedScore = (maxTokPerSec > 0 && stats && stats.tokPerSec > 0)
-    ? stats.tokPerSec / maxTokPerSec
-    : SPEED_PRIOR;
-
-  return successScore + SPEED_WEIGHT * speedScore;
+// Stochastic score used for routing — samples from the Beta posterior so that
+// models are chosen probabilistically rather than always picking the single best.
+function thompsonSampleScore(platform: string, modelId: string): number {
+  const stats = statsCache?.get(`${platform}:${modelId}`);
+  const alpha = (stats?.successes ?? 0) + PRIOR_SUCCESS;
+  const beta  = ((stats?.total ?? 0) - (stats?.successes ?? 0)) + PRIOR_FAILURE;
+  // No data → optimistic prior for exploration; with data → apply slow-speed penalty
+  const speed = (stats && stats.tokPerSec > 0)
+    ? speedContribution(stats.tokPerSec, maxTokPerSec)
+    : SPEED_WEIGHT * SPEED_PRIOR;
+  return sampleBeta(alpha, beta) + speed;
 }
 
 /**
@@ -252,10 +287,9 @@ export function getAllPenalties(): Array<{ modelDbId: number; count: number; pen
 /**
  * Route a request to the best available model.
  *
- * Ordering combines three signals (all lower = tried first):
- *   1. Analytics bias   — derived from recent success rate + UCB exploration bonus
- *   2. Rate-limit penalty — in-session 429 counter with time decay
- *   3. Base priority    — user-configured fallback order
+ * Ordering is pure bandit: higher score = tried first.
+ *   score = bayesSuccessRate + ucbExplorationBonus + SPEED_WEIGHT * normalizedTokPerSec
+ *   effectiveScore = score − penalty × PENALTY_SCORE_WEIGHT
  *
  * If preferredModelDbId is set, that model is forced to the front (sticky sessions)
  * to prevent hallucination from model switching mid-conversation.
@@ -270,28 +304,21 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
   // Refresh analytics cache (no-op if called within the TTL window)
   refreshStatsCache(db);
 
-  // Single query: join fallback config with model details, filtering out disabled rows
   const chain = db.prepare(`
-    SELECT fc.model_db_id, fc.priority,
+    SELECT fc.model_db_id,
            m.platform, m.model_id, m.display_name,
            m.rpm_limit, m.rpd_limit, m.tpm_limit, m.tpd_limit
     FROM fallback_config fc
     JOIN models m ON m.id = fc.model_db_id AND m.enabled = 1
     WHERE fc.enabled = 1
-    ORDER BY fc.priority ASC
   `).all() as ChainRow[];
 
-  // Score each entry. analyticsBias nudges a model up (negative) or down
-  // (positive) relative to its configured base priority, capped at
-  // ANALYTICS_SHIFT_CAP so that a model's track record can never completely
-  // override the user's intended ordering.
   const sorted = chain.map(entry => ({
     ...entry,
-    effectivePriority:
-      entry.priority
-      + getPenalty(entry.model_db_id)
-      + (1 - getAnalyticsScore(entry.platform, entry.model_id)) * ANALYTICS_SHIFT_CAP,
-  })).sort((a, b) => a.effectivePriority - b.effectivePriority);
+    effectiveScore:
+      thompsonSampleScore(entry.platform, entry.model_id)
+      - getPenalty(entry.model_db_id) * PENALTY_SCORE_WEIGHT,
+  })).sort((a, b) => b.effectiveScore - a.effectiveScore);
 
   // Sticky session: force preferred model to the front regardless of score
   if (preferredModelDbId) {
