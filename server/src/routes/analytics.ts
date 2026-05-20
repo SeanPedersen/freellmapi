@@ -68,6 +68,7 @@ analyticsRouter.get('/by-model', (req: Request, res: Response) => {
       COUNT(*) as requests,
       SUM(CASE WHEN r.status = 'success' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as success_rate,
       AVG(r.latency_ms) as avg_latency_ms,
+      AVG(r.ttfb_ms) as avg_ttfb_ms,
       SUM(r.input_tokens) as total_input_tokens,
       SUM(r.output_tokens) as total_output_tokens,
       SUM(r.output_tokens) / (SUM(r.latency_ms) / 1000.0) as output_tokens_per_sec
@@ -85,6 +86,7 @@ analyticsRouter.get('/by-model', (req: Request, res: Response) => {
     requests: r.requests,
     successRate: Math.round(r.success_rate * 10) / 10,
     avgLatencyMs: Math.round(r.avg_latency_ms),
+    avgTtfbMs: r.avg_ttfb_ms != null ? Math.round(r.avg_ttfb_ms) : null,
     totalInputTokens: r.total_input_tokens ?? 0,
     totalOutputTokens: r.total_output_tokens ?? 0,
     outputTokensPerSec: r.output_tokens_per_sec != null ? Math.round(r.output_tokens_per_sec) : null,

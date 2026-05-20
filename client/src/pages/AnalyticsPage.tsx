@@ -42,7 +42,7 @@ const axisStyle = { fontSize: 11, fill: 'var(--muted-foreground)' } as const
 const gridStyle = 'var(--border)'
 const primaryFill = 'var(--foreground)'
 
-type SortKey = 'displayName' | 'platform' | 'requests' | 'successRate' | 'avgLatencyMs' | 'totalInputTokens' | 'totalOutputTokens' | 'outputTokensPerSec'
+type SortKey = 'displayName' | 'platform' | 'requests' | 'successRate' | 'avgLatencyMs' | 'avgTtfbMs' | 'totalInputTokens' | 'totalOutputTokens' | 'outputTokensPerSec'
 type SortDir = 'asc' | 'desc'
 
 function sortModels(rows: any[], key: SortKey, dir: SortDir) {
@@ -210,6 +210,7 @@ export default function AnalyticsPage() {
                         <SortableHead label="Requests" sortKey="requests" current={sortKey} dir={sortDir} onSort={handleSort} className="text-right" />
                         <SortableHead label="Success" sortKey="successRate" current={sortKey} dir={sortDir} onSort={handleSort} className="text-right" />
                         <SortableHead label="Latency" sortKey="avgLatencyMs" current={sortKey} dir={sortDir} onSort={handleSort} className="text-right" />
+                        <SortableHead label="TTFB" sortKey="avgTtfbMs" current={sortKey} dir={sortDir} onSort={handleSort} className="text-right" />
                         <SortableHead label="In tokens" sortKey="totalInputTokens" current={sortKey} dir={sortDir} onSort={handleSort} className="text-right" />
                         <SortableHead label="Out tokens" sortKey="totalOutputTokens" current={sortKey} dir={sortDir} onSort={handleSort} className="text-right" />
                         <SortableHead label="tok/s" sortKey="outputTokensPerSec" current={sortKey} dir={sortDir} onSort={handleSort} className="text-right pr-4" />
@@ -223,6 +224,7 @@ export default function AnalyticsPage() {
                           <TableCell className="text-right tabular-nums">{m.requests}</TableCell>
                           <TableCell className="text-right tabular-nums">{m.successRate}%</TableCell>
                           <TableCell className="text-right tabular-nums">{m.avgLatencyMs} ms</TableCell>
+                          <TableCell className="text-right tabular-nums">{m.avgTtfbMs != null ? `${m.avgTtfbMs} ms` : '—'}</TableCell>
                           <TableCell className="text-right tabular-nums">{formatTokens(m.totalInputTokens)}</TableCell>
                           <TableCell className="text-right tabular-nums">{formatTokens(m.totalOutputTokens)}</TableCell>
                           <TableCell className="text-right tabular-nums pr-4">{m.outputTokensPerSec != null ? m.outputTokensPerSec : '—'}</TableCell>

@@ -285,12 +285,13 @@ function stringifyModelResponseForLog(value: unknown): string {
   }
 }
 
-function logFinalModelResponse(route: RouteResult, response: unknown): void {
+function logFinalModelResponse(route: RouteResult, response: unknown, ttfbMs: number | null): void {
+  const ttfbStr = ttfbMs !== null ? ` | ttfb=${ttfbMs}ms` : '';
   if (process.env.LOG_SENSITIVE_DATA !== 'true') {
-    console.log(`[Model Response] ${route.platform}/${route.modelId}`);
+    console.log(`[Model Response] ${route.platform}/${route.modelId}${ttfbStr}`);
     return;
   }
-  console.log(`[Model Response] ${route.platform}/${route.modelId}: ${stringifyModelResponseForLog(response)}`);
+  console.log(`[Model Response] ${route.platform}/${route.modelId}${ttfbStr}: ${stringifyModelResponseForLog(response)}`);
 }
 
 interface ResponsesStreamContext {
@@ -915,6 +916,7 @@ async function handleChatCompletion(
         // instead of a silently truncated stream.
         let totalOutputTokens = 0;
         let streamStarted = false;
+        let ttfbMs: number | null = null;
         try {
           const gen = route.provider.streamChatCompletion(
             route.apiKey, messages, route.modelId,
@@ -923,6 +925,7 @@ async function handleChatCompletion(
 
           for await (const chunk of gen) {
             if (!streamStarted) {
+              ttfbMs = Date.now() - start;
               res.setHeader('Content-Type', 'text/event-stream');
               res.setHeader('Cache-Control', 'no-cache');
               res.setHeader('Connection', 'keep-alive');
@@ -968,21 +971,21 @@ async function handleChatCompletion(
                 output_tokens: totalOutputTokens,
                 total_tokens: estimatedInputTokens + totalOutputTokens,
               },
-            });
+            }, ttfbMs);
           } else {
             res.write('data: [DONE]\n\n');
             logFinalModelResponse(route, {
               object: 'chat.completion.stream',
               model: route.modelId,
               output_tokens: totalOutputTokens,
-            });
+            }, ttfbMs);
           }
           res.end();
 
           recordTokens(route.platform, route.modelId, route.keyId, estimatedInputTokens + totalOutputTokens);
           recordSuccess(route.modelDbId);
           setStickyModel(messages, route.modelDbId);
-          logRequest(route.platform, route.modelId, 'success', estimatedInputTokens, totalOutputTokens, Date.now() - start, null);
+          logRequest(route.platform, route.modelId, 'success', estimatedInputTokens, totalOutputTokens, Date.now() - start, ttfbMs, null);
           return;
         } catch (streamErr: any) {
           if (streamStarted) {
@@ -1008,7 +1011,7 @@ async function handleChatCompletion(
               }
               res.end();
             } catch { /* socket gone */ }
-            logRequest(route.platform, route.modelId, 'error', estimatedInputTokens, totalOutputTokens, Date.now() - start, streamErr.message);
+            logRequest(route.platform, route.modelId, 'error', estimatedInputTokens, totalOutputTokens, Date.now() - start, ttfbMs, streamErr.message);
             return;
           }
           // Pre-stream error — bubble to outer retry/502 handler.
@@ -1019,6 +1022,7 @@ async function handleChatCompletion(
           route.apiKey, messages, route.modelId,
           { temperature, max_tokens, top_p, tools, tool_choice, parallel_tool_calls },
         );
+        const ttfbMs = Date.now() - start;
 
         const totalTokens = result.usage?.total_tokens ?? 0;
         recordTokens(route.platform, route.modelId, route.keyId, totalTokens);
@@ -1029,19 +1033,19 @@ async function handleChatCompletion(
         if (attempt > 0) res.setHeader('X-Fallback-Attempts', String(attempt));
         const responseBody = formatResponse ? formatResponse(result) : result;
         res.json(responseBody);
-        logFinalModelResponse(route, responseBody);
+        logFinalModelResponse(route, responseBody, ttfbMs);
 
         logRequest(
           route.platform, route.modelId, 'success',
           result.usage?.prompt_tokens ?? 0,
           result.usage?.completion_tokens ?? 0,
-          Date.now() - start, null,
+          Date.now() - start, ttfbMs, null,
         );
         return;
       }
     } catch (err: any) {
       const latency = Date.now() - start;
-      logRequest(route.platform, route.modelId, 'error', estimatedInputTokens, 0, latency, err.message);
+      logRequest(route.platform, route.modelId, 'error', estimatedInputTokens, 0, latency, null, err.message);
 
       if (isRetryableError(err)) {
         // Put this model+key on cooldown and try the next one
@@ -1081,14 +1085,15 @@ function logRequest(
   inputTokens: number,
   outputTokens: number,
   latencyMs: number,
+  ttfbMs: number | null,
   error: string | null,
 ) {
   try {
     const db = getDb();
     db.prepare(`
-      INSERT INTO requests (platform, model_id, status, input_tokens, output_tokens, latency_ms, error)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(platform, modelId, status, inputTokens, outputTokens, latencyMs, error);
+      INSERT INTO requests (platform, model_id, status, input_tokens, output_tokens, latency_ms, ttfb_ms, error)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(platform, modelId, status, inputTokens, outputTokens, latencyMs, ttfbMs, error);
   } catch (e) {
     console.error('Failed to log request:', e);
   }

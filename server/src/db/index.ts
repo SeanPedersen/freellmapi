@@ -46,6 +46,7 @@ export function initDb(dbPath?: string): Database.Database {
   migrateModelsV9(db);
   migrateModelsV10(db);
   migrateModelsV11(db);
+  migrateRequestsV12(db);
   ensureUnifiedKey(db);
 
   console.log(`Database initialized at ${resolvedPath}`);
@@ -927,6 +928,13 @@ function migrateModelsV11(db: Database.Database) {
     }
   });
   apply();
+}
+
+function migrateRequestsV12(db: Database.Database) {
+  const hasColumn = (db.prepare('PRAGMA table_info(requests)').all() as any[]).some(c => c.name === 'ttfb_ms');
+  if (!hasColumn) {
+    db.prepare('ALTER TABLE requests ADD COLUMN ttfb_ms INTEGER').run();
+  }
 }
 
 function ensureUnifiedKey(db: Database.Database) {
