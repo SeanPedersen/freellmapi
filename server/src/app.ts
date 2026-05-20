@@ -63,6 +63,7 @@ export function createApp(): Express {
     };
 
     res.on('finish', () => {
+      if (requestUrl.startsWith('/api/logs')) return;
       console.log(`[HTTP] ${req.method} ${requestUrl} -> ${res.statusCode} (${Date.now() - start}ms)`);
       if (isSensitiveLoggingEnabled() && res.statusCode >= 400 && requestUrl.startsWith('/v1/')) {
         console.warn(`[HTTP] ${req.method} ${requestUrl} request body: ${stringifyForLog(req.body)}`);

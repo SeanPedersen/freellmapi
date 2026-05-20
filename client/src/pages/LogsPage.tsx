@@ -43,9 +43,19 @@ export default function LogsPage() {
     refetchInterval: 2000,
   })
 
+  const NOISE_PREFIXES = ['[HTTP] GET /api/logs', '[HTTP] GET /api/ping']
+  const cleanLogs = logs.filter(e => !NOISE_PREFIXES.some(p => e.message.startsWith(p)))
+
   const visibleLogs = v1Only
-    ? logs.filter(e => e.message.includes('/v1/') || e.message.startsWith('[Model Response]') || e.message.startsWith('[Proxy]') || e.message.startsWith('[Request]'))
-    : logs
+    ? cleanLogs.filter(e =>
+        e.message.includes('/v1/')
+        || e.message.startsWith('[Model Response]')
+        || e.message.startsWith('[Proxy]')
+        || e.message.startsWith('[Request]')
+        || e.message.startsWith('[Session]')
+        || e.message.startsWith('[Sticky]')
+      )
+    : cleanLogs
 
   function handleScroll() {
     const el = containerRef.current

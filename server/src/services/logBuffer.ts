@@ -25,7 +25,9 @@ function isV1Entry(message: string): boolean {
   return message.includes('/v1/')
     || message.startsWith('[Model Response]')
     || message.startsWith('[Proxy]')
-    || message.startsWith('[Request]');
+    || message.startsWith('[Request]')
+    || message.startsWith('[Session]')
+    || message.startsWith('[Sticky]');
 }
 
 function appendToDisk(entry: LogEntry): void {
@@ -65,10 +67,13 @@ function loadFromDisk(): void {
 
 loadFromDisk();
 
+const NOISE_PREFIXES = ['[HTTP] GET /api/logs', '[HTTP] GET /api/ping'];
+
 function push(level: LogLevel, args: unknown[]) {
   const message = args
     .map(a => (typeof a === 'string' ? a : JSON.stringify(a)))
     .join(' ');
+  if (NOISE_PREFIXES.some(p => message.startsWith(p))) return;
   const entry: LogEntry = { id: nextId++, timestamp: new Date().toISOString(), level, message };
 
   if (isV1Entry(message)) {
@@ -90,6 +95,8 @@ console.warn = (...args: unknown[]) => { origWarn(...args); push('warn', args); 
 console.error = (...args: unknown[]) => { origError(...args); push('error', args); };
 
 export function getLogs(limit = V1_MAX_ENTRIES + OTHER_MAX_ENTRIES): LogEntry[] {
-  const combined = [...v1Buffer, ...otherBuffer].sort((a, b) => a.id - b.id);
+  const combined = [...v1Buffer, ...otherBuffer]
+    .filter(e => !NOISE_PREFIXES.some(p => e.message.startsWith(p)))
+    .sort((a, b) => a.id - b.id);
   return combined.slice(-limit).reverse();
 }
