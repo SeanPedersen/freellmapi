@@ -12,7 +12,7 @@ export const keysRouter: Router = Router();
 const PLATFORMS = [
   'google', 'groq', 'cerebras', 'sambanova', 'nvidia', 'mistral',
   'openrouter', 'github', 'cohere', 'cloudflare', 'zhipu', 'ollama',
-  'kilo', 'pollinations', 'llm7',
+  'kilo', 'pollinations', 'llm7', 'inceptionlabs',
 ] as const;
 
 const addKeySchema = z.object({

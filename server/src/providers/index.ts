@@ -133,6 +133,17 @@ register(new OpenAICompatProvider({
   baseUrl: 'https://api.llm7.io/v1',
 }));
 
+// InceptionLabs — discrete diffusion LLMs (dLLMs). OpenAI-compatible API.
+// mercury-2 is the only catalogued model: legacy variants (mercury, mercury-coder)
+// return 403 for accounts created after Feb 24 2026; edit variants use a FIM
+// endpoint (/v1/fim/completions) incompatible with chat completions.
+// Pricing: $0.25/$0.75 per 1M in/out tokens (pay-as-you-go).
+register(new OpenAICompatProvider({
+  platform: 'inceptionlabs',
+  name: 'InceptionLabs',
+  baseUrl: 'https://api.inceptionlabs.ai/v1',
+}));
+
 // Chutes was evaluated for V11 and dropped: probe with a free-tier key
 // returned 402 on every model — "Quota exceeded and account balance is
 // $0.0, please pay with fiat or send tao". The "free" tier requires a

@@ -47,6 +47,7 @@ export function initDb(dbPath?: string): Database.Database {
   migrateModelsV10(db);
   migrateModelsV11(db);
   migrateRequestsV12(db);
+  migrateModelsV13(db);
   ensureUnifiedKey(db);
 
   console.log(`Database initialized at ${resolvedPath}`);
@@ -914,6 +915,41 @@ function migrateModelsV11(db: Database.Database) {
     ['llm7',         'GLM-4.6V-Flash',                            'GLM-4.6V Flash (LLM7)',         15, 9,  'Large',    100, null, null, null, '~2-3M (100/hr)', 131072],
   ];
 
+  const apply = db.transaction(() => {
+    for (const a of additions) insert.run(...a);
+    const missing = db.prepare(`
+      SELECT m.id FROM models m
+      LEFT JOIN fallback_config f ON m.id = f.model_db_id
+      WHERE f.id IS NULL ORDER BY m.intelligence_rank ASC
+    `).all() as { id: number }[];
+    if (missing.length > 0) {
+      const maxPriority = (db.prepare('SELECT COALESCE(MAX(priority), 0) AS mx FROM fallback_config').get() as { mx: number }).mx;
+      const addFb = db.prepare('INSERT INTO fallback_config (model_db_id, priority, enabled) VALUES (?, ?, 1)');
+      for (let i = 0; i < missing.length; i++) addFb.run(missing[i].id, maxPriority + i + 1);
+    }
+  });
+  apply();
+}
+
+/**
+ * V13 (May 2026): Add InceptionLabs as a new platform. Discrete diffusion
+ * dLLMs — 5-10x faster than Haiku/GPT-4o Mini with comparable quality.
+ * Only mercury-2 is catalogued: legacy variants (mercury, mercury-coder,
+ * mercury-small) return 403 for API keys created after Feb 24 2026; the
+ * edit-only models (mercury-edit, mercury-edit-2) use a separate FIM
+ * endpoint and don't support /v1/chat/completions.
+ * Pricing: pay-as-you-go ($0.25/$0.75 per 1M in/out tokens).
+ * Rate limits: not published — null limits let the router learn from 429s.
+ */
+function migrateModelsV13(db: Database.Database) {
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO models (platform, model_id, display_name, intelligence_rank, speed_rank, size_label, rpm_limit, rpd_limit, tpm_limit, tpd_limit, monthly_token_budget, context_window)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const additions: Array<[string, string, string, number, number, string, number | null, number | null, number | null, number | null, string, number | null]> = [
+    // mercury-2: flagship dLLM — tools + JSON + structured_outputs. 128K context, 50K max output.
+    ['inceptionlabs', 'mercury-2', 'Mercury 2', 15, 1, 'Large', null, null, null, null, 'pay-as-you-go', 128000],
+  ];
   const apply = db.transaction(() => {
     for (const a of additions) insert.run(...a);
     const missing = db.prepare(`
