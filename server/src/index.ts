@@ -11,11 +11,15 @@ async function main() {
   initDb();
   const app = createApp();
 
-  app.listen(Number(PORT), '0.0.0.0', () => {
+  const server = app.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
     console.log(`Proxy endpoint: http://0.0.0.0:${PORT}/v1/chat/completions`);
     startHealthChecker();
   });
+
+  const shutdown = () => { server.close(() => process.exit(0)); };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 main().catch(console.error);
