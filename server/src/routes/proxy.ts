@@ -28,15 +28,10 @@ function getSessionKey(messages: ChatMessage[]): string {
   // distinct conversations with identical openings don't collide.
   const firstUser = messages.find(m => m.role === 'user');
   if (!firstUser || typeof firstUser.content !== 'string') return '';
-  const hash = crypto.createHash('sha1').update(firstUser.content).digest('hex');
-  return `${hash}:${messages.length > 2 ? 'multi' : 'single'}`;
+  return crypto.createHash('sha1').update(firstUser.content).digest('hex');
 }
 
 function getStickyModel(messages: ChatMessage[]): number | undefined {
-  // Only apply sticky for multi-turn (has assistant messages = continuation)
-  const hasAssistant = messages.some(m => m.role === 'assistant');
-  if (!hasAssistant) return undefined;
-
   const key = getSessionKey(messages);
   if (!key) return undefined;
 
@@ -362,13 +357,22 @@ function normalizeResponseTools(tools: z.infer<typeof responseCreateSchema>['too
 }
 
 function getPreviousResponseMessages(previousResponseId: string | undefined): ChatMessage[] {
-  if (!previousResponseId) return [];
+  if (!previousResponseId) {
+    console.log('[Session] no previous_response_id → fresh conversation');
+    return [];
+  }
   const session = responseSessionMap.get(previousResponseId);
-  if (!session) return [];
-  if (Date.now() - session.lastUsed > RESPONSE_SESSION_TTL_MS) {
+  if (!session) {
+    console.log(`[Session] previous_response_id="${previousResponseId}" not found in map (size=${responseSessionMap.size}) → session miss`);
+    return [];
+  }
+  const ageMs = Date.now() - session.lastUsed;
+  if (ageMs > RESPONSE_SESSION_TTL_MS) {
+    console.log(`[Session] previous_response_id="${previousResponseId}" expired (age=${Math.round(ageMs / 1000)}s) → evicted`);
     responseSessionMap.delete(previousResponseId);
     return [];
   }
+  console.log(`[Session] hit previous_response_id="${previousResponseId}" → restored ${session.messages.length} msg(s) (age=${Math.round(ageMs / 1000)}s)`);
   session.lastUsed = Date.now();
   return session.messages.map(message => ({ ...message }));
 }
@@ -379,10 +383,12 @@ function saveResponseSession(responseId: string, itemId: string, messages: ChatM
     content: outputText || null,
     ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
   };
+  const stored = [...messages.map(message => ({ ...message })), assistantMessage];
   responseSessionMap.set(responseId, {
-    messages: [...messages.map(message => ({ ...message })), assistantMessage],
+    messages: stored,
     lastUsed: Date.now(),
   });
+  console.log(`[Session] saved response_id="${responseId}" with ${stored.length} msg(s) (map size=${responseSessionMap.size})`);
   responseItemMap.set(itemId, assistantMessage);
 
   if (responseSessionMap.size <= MAX_RESPONSE_SESSIONS) return;
