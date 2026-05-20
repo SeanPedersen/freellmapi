@@ -101,8 +101,8 @@ proxyRouter.get('/models', (_req: Request, res: Response) => {
 });
 
 // OpenAI-compatible GET /models/:id endpoint
-proxyRouter.get('/models/:id+', (req: Request, res: Response) => {
-  const id = Array.isArray(req.params.id) ? req.params.id.join('/') : req.params.id;
+proxyRouter.get('/models/*', (req: Request, res: Response) => {
+  const id = (req.params as any)[0] as string;
   if (id === AUTO_MODEL_ID) {
     res.json({ id: AUTO_MODEL_ID, object: 'model', created: 0, owned_by: 'freellmapi' });
     return;
