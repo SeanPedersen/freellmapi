@@ -55,40 +55,49 @@ const SLOW_SPEED_PENALTY_WEIGHT = 0.35;
 export const PENALTY_SCORE_WEIGHT = 0.05;
 
 // ── TTFB scoring ─────────────────────────────────────────────────────────────
-// Weight of the TTFB signal. At its best (+1.0 raw) this adds 0.25 to the score;
-// at its worst (>2 s) it subtracts ~0.075, actively discouraging slow models.
+// Two zones with different scaling:
+//
+//  Reward zone  (< 2000 ms): 0 → +TTFB_WEIGHT  — fast models get a bonus
+//  Penalty zone (≥ 2000 ms): 0 → -0.5          — heavy but capped so a slow
+//    100%-success model still outranks a 0%-success model
+//
+//   < 500 ms   → +0.25  (very good)
+//   500–1000   → +0.25 → +0.15  (good, linear)
+//   1000–2000  → +0.15 → 0.0    (ok, linear)
+//   2000–10000 →  0.0  → -0.5   (bad, linear — full penalty at 10 s)
+//   > 10000 ms → -0.5  (capped)
 const TTFB_WEIGHT = 0.25;
 
-// Thresholds (ms) that define the four quality bands.
-const TTFB_VERY_GOOD_MS = 500;
-const TTFB_GOOD_MS      = 1000;
-const TTFB_ACCEPTABLE_MS = 2000;
+const TTFB_VERY_GOOD_MS   = 500;
+const TTFB_GOOD_MS        = 1000;
+const TTFB_ACCEPTABLE_MS  = 2000;
+const TTFB_MAX_PENALTY_MS = 10_000; // -0.5 penalty reached here, capped beyond
+const TTFB_MAX_PENALTY    = 0.5;    // cap: slow+successful still beats 0% success
 
-// Optimistic prior for models with no TTFB measurements yet — slightly below
-// "good" so they get a fair chance to prove themselves via exploration.
+// Optimistic prior for truly unexplored models (zero requests) — encourages routing
+// them at least once. Never applied to models that have failed requests.
 const TTFB_PRIOR = 0.75;
 
-// Returns a normalized score in [~-0.3, 1.0] for a given average TTFB.
-//   < 500 ms  → 1.0  (very good)
-//   500–1000  → 1.0 → 0.6  (good, linear)
-//   1000–2000 → 0.6 → 0.0  (ok, linear)
-//   > 2000 ms → -0.3  (bad — active penalty to route away)
-function ttfbRawScore(avgTtfbMs: number): number {
-  if (avgTtfbMs < TTFB_VERY_GOOD_MS) return 1.0;
+// Returns the TTFB contribution for a model with measured data.
+// null (no successful requests) → 0; caller applies the prior for unseen models.
+function ttfbContribution(avgTtfbMs: number | null): number {
+  if (avgTtfbMs === null) return 0;
+
+  if (avgTtfbMs < TTFB_VERY_GOOD_MS) return TTFB_WEIGHT * 1.0;
   if (avgTtfbMs < TTFB_GOOD_MS) {
-    return 1.0 - 0.4 * (avgTtfbMs - TTFB_VERY_GOOD_MS) / (TTFB_GOOD_MS - TTFB_VERY_GOOD_MS);
+    const t = (avgTtfbMs - TTFB_VERY_GOOD_MS) / (TTFB_GOOD_MS - TTFB_VERY_GOOD_MS);
+    return TTFB_WEIGHT * (1.0 - 0.4 * t);
   }
   if (avgTtfbMs < TTFB_ACCEPTABLE_MS) {
-    return 0.6 - 0.6 * (avgTtfbMs - TTFB_GOOD_MS) / (TTFB_ACCEPTABLE_MS - TTFB_GOOD_MS);
+    const t = (avgTtfbMs - TTFB_GOOD_MS) / (TTFB_ACCEPTABLE_MS - TTFB_GOOD_MS);
+    return TTFB_WEIGHT * (0.6 - 0.6 * t);
   }
-  return -0.3;
-}
-
-// Returns the weighted TTFB contribution to the routing score.
-// null → optimistic prior (exploration for new/unseen models).
-function ttfbContribution(avgTtfbMs: number | null): number {
-  const raw = avgTtfbMs !== null ? ttfbRawScore(avgTtfbMs) : TTFB_PRIOR;
-  return TTFB_WEIGHT * raw;
+  // Penalty zone: continuous from 0 at 2 s to -TTFB_MAX_PENALTY at 10 s+
+  const t = Math.min(
+    (avgTtfbMs - TTFB_ACCEPTABLE_MS) / (TTFB_MAX_PENALTY_MS - TTFB_ACCEPTABLE_MS),
+    1.0,
+  );
+  return -TTFB_MAX_PENALTY * t;
 }
 
 // Returns the combined speed term (reward − slow penalty) for a model with data.
@@ -200,12 +209,15 @@ function thompsonSampleScore(platform: string, modelId: string): number {
   const stats = statsCache?.get(`${platform}:${modelId}`);
   const alpha = (stats?.successes ?? 0) + PRIOR_SUCCESS;
   const beta  = ((stats?.total ?? 0) - (stats?.successes ?? 0)) + PRIOR_FAILURE;
-  // No data → optimistic prior for exploration; with data → apply slow-speed penalty
-  const speed = (stats && stats.tokPerSec > 0)
-    ? speedContribution(stats.tokPerSec, maxTokPerSec)
-    : SPEED_WEIGHT * SPEED_PRIOR;
-  // No data → TTFB_PRIOR (optimistic, encourages exploration of unseen models)
-  const ttfbScore = ttfbContribution(stats?.avgTtfbMs ?? null);
+  // Optimistic priors only for truly unseen models (stats === undefined).
+  // A model with failed requests gets no speed/TTFB boost — its null values
+  // mean it never succeeded, not that it's unexplored.
+  const speed = stats === undefined
+    ? SPEED_WEIGHT * SPEED_PRIOR
+    : (stats.tokPerSec > 0 ? speedContribution(stats.tokPerSec, maxTokPerSec) : 0);
+  const ttfbScore = stats === undefined
+    ? TTFB_WEIGHT * TTFB_PRIOR
+    : ttfbContribution(stats.avgTtfbMs);
   return sampleBeta(alpha, beta) + speed + ttfbScore;
 }
 
