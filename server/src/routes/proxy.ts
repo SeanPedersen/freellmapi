@@ -864,6 +864,12 @@ async function handleChatCompletion(
   }, 0);
   const estimatedTotal = estimatedInputTokens + (max_tokens ?? 1000);
 
+  const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
+  const preview = typeof lastUserMessage?.content === 'string'
+    ? lastUserMessage.content.slice(0, 120).replace(/\n/g, ' ')
+    : '';
+  console.log(`[Request] ${rawModel ?? 'auto'} | ${messages.length} msg(s) | stream=${!!stream} | "${preview}"`);
+
   // Explicit `model` field pins routing. If the catalog has no enabled row
   // matching the requested id, return 400 — silently auto-routing to a
   // different model would be surprising to OpenAI-compatible clients.

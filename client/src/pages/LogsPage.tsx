@@ -41,7 +41,7 @@ export default function LogsPage() {
   })
 
   const visibleLogs = v1Only
-    ? logs.filter(e => e.message.includes('/v1/') || e.message.startsWith('[Model Response]') || e.message.startsWith('[Proxy]'))
+    ? logs.filter(e => e.message.includes('/v1/') || e.message.startsWith('[Model Response]') || e.message.startsWith('[Proxy]') || e.message.startsWith('[Request]'))
     : logs
 
   useEffect(() => {
