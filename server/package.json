@@ -11,7 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@freellmapi/shared": "*",
+    "@freellmapi/shared": "workspace:*",
     "better-sqlite3": "^12.4.1",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
