@@ -224,7 +224,7 @@ export default function FallbackPage() {
     <div>
       <PageHeader
         title="Bandit routing"
-        description="Models are ranked live by success rate and speed. Toggle to include or exclude from the routing chain."
+        description="Models are ranked by success rate, TTFB, and tok/s over the last 7 days. Toggle to include or exclude from the routing chain."
       />
 
       <div className="space-y-6">
