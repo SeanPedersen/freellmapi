@@ -29,23 +29,31 @@ interface ChatMessage {
   meta?: MessageMeta
 }
 
-function AssistantBubble({ msg }: { msg: ChatMessage }) {
+function AssistantBubble({ msg, isStreaming = false }: { msg: ChatMessage; isStreaming?: boolean }) {
   return (
     <div className="bg-muted max-w-[78%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed">
-      <div className="prose prose-sm dark:prose-invert max-w-none
-        [&_p]:my-1 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0
-        [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5
-        [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm
-        [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-medium
-        [&_h1]:mt-3 [&_h2]:mt-2 [&_h3]:mt-2
-        [&_blockquote]:border-l-2 [&_blockquote]:border-muted-foreground/40 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground
-        [&_table]:text-xs [&_th]:font-medium [&_th]:border [&_th]:px-2 [&_th]:py-1 [&_th]:border-border
-        [&_td]:border [&_td]:px-2 [&_td]:py-1 [&_td]:border-border
-        [&_pre]:bg-background [&_pre]:rounded [&_pre]:p-3 [&_pre]:overflow-x-auto [&_pre]:my-2 [&_pre]:text-xs
-        [&_code]:font-mono [&_:not(pre)>code]:bg-background [&_:not(pre)>code]:rounded [&_:not(pre)>code]:px-1 [&_:not(pre)>code]:py-0.5 [&_:not(pre)>code]:text-xs
-        [&_hr]:border-border [&_hr]:my-2">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-      </div>
+      {msg.content === '' && isStreaming ? (
+        <div className="flex gap-1 py-1.5">
+          <span className="size-1.5 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: '0ms' }} />
+          <span className="size-1.5 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: '150ms' }} />
+          <span className="size-1.5 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: '300ms' }} />
+        </div>
+      ) : (
+        <div className="prose prose-sm dark:prose-invert max-w-none
+          [&_p]:my-1 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0
+          [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5
+          [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm
+          [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-medium
+          [&_h1]:mt-3 [&_h2]:mt-2 [&_h3]:mt-2
+          [&_blockquote]:border-l-2 [&_blockquote]:border-muted-foreground/40 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground
+          [&_table]:text-xs [&_th]:font-medium [&_th]:border [&_th]:px-2 [&_th]:py-1 [&_th]:border-border
+          [&_td]:border [&_td]:px-2 [&_td]:py-1 [&_td]:border-border
+          [&_pre]:bg-background [&_pre]:rounded [&_pre]:p-3 [&_pre]:overflow-x-auto [&_pre]:my-2 [&_pre]:text-xs
+          [&_code]:font-mono [&_:not(pre)>code]:bg-background [&_:not(pre)>code]:rounded [&_:not(pre)>code]:px-1 [&_:not(pre)>code]:py-0.5 [&_:not(pre)>code]:text-xs
+          [&_hr]:border-border [&_hr]:my-2">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+        </div>
+      )}
       {msg.meta && (
         <div className="flex items-center gap-2 mt-2 flex-wrap text-[11px] opacity-70 tabular-nums">
           {msg.meta.platform && <span>{msg.meta.platform}</span>}
@@ -120,6 +128,25 @@ export default function PlaygroundPage() {
 
       const routedVia = res.headers.get('X-Routed-Via')
       const fallbackAttempts = res.headers.get('X-Fallback-Attempts')
+      const via = routedVia ? {
+        platform: routedVia.split('/')[0],
+        model: routedVia.split('/').slice(1).join('/'),
+      } : undefined
+
+      if (via || fallbackAttempts) {
+        setMessages(prev => {
+          const msgs = [...prev]
+          msgs[msgs.length - 1] = {
+            ...msgs[msgs.length - 1],
+            meta: {
+              platform: via?.platform,
+              model: via?.model,
+              fallbackAttempts: fallbackAttempts ? parseInt(fallbackAttempts) : undefined,
+            },
+          }
+          return msgs
+        })
+      }
 
       if (!res.ok || !res.body) {
         const err = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }))
@@ -163,10 +190,6 @@ export default function PlaygroundPage() {
       }
 
       const latency = Date.now() - start
-      const via = routedVia ? {
-        platform: routedVia.split('/')[0],
-        model: routedVia.split('/').slice(1).join('/'),
-      } : undefined
 
       setMessages(prev => {
         const msgs = [...prev]
@@ -181,11 +204,12 @@ export default function PlaygroundPage() {
         }
         return msgs
       })
-    } catch (err: any) {
-      if (err.name === 'AbortError') return
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      const message = err instanceof Error ? err.message : 'Unknown error'
       setMessages(prev => {
         const msgs = [...prev]
-        msgs[msgs.length - 1] = { role: 'assistant', content: `Error: ${err.message}` }
+        msgs[msgs.length - 1] = { role: 'assistant', content: `Error: ${message}` }
         return msgs
       })
     } finally {
@@ -211,7 +235,9 @@ export default function PlaygroundPage() {
 
   const activeModelLabel = selectedModel === 'auto'
     ? 'Auto (fallback chain)'
-    : availableModels.find(m => m.modelId === selectedModel)?.displayName ?? selectedModel
+    : selectedModel === 'freellmapi/auto-smart'
+      ? 'Auto Smart (intelligence router)'
+      : availableModels.find(m => m.modelId === selectedModel)?.displayName ?? selectedModel
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
@@ -226,6 +252,7 @@ export default function PlaygroundPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="auto">Auto (fallback chain)</SelectItem>
+                <SelectItem value="freellmapi/auto-smart">Auto Smart (intelligence router)</SelectItem>
                 {availableModels.map(m => (
                   <SelectItem key={m.modelDbId} value={m.modelId}>
                     <span className="flex items-center gap-2">
@@ -264,16 +291,8 @@ export default function PlaygroundPage() {
                     <div className="max-w-[78%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed bg-primary text-primary-foreground">
                       <div className="whitespace-pre-wrap">{msg.content}</div>
                     </div>
-                  ) : msg.content === '' && streaming ? (
-                    <div className="bg-muted rounded-2xl px-4 py-3">
-                      <div className="flex gap-1">
-                        <span className="size-1.5 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: '0ms' }} />
-                        <span className="size-1.5 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: '150ms' }} />
-                        <span className="size-1.5 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: '300ms' }} />
-                      </div>
-                    </div>
                   ) : (
-                    <AssistantBubble msg={msg} />
+                    <AssistantBubble msg={msg} isStreaming={streaming && i === messages.length - 1} />
                   )}
                 </div>
               ))}

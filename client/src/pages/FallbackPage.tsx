@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/page-header'
 interface FallbackEntry {
   modelDbId: number
   score: number
+  smartScore: number
   effectiveScore: number
   penalty: number
   rateLimitHits: number
@@ -35,6 +36,56 @@ interface TokenUsageData {
   totalBudget: number
   totalUsed: number
   models: { displayName: string; platform: string; budget: number }[]
+}
+
+type SortKey = 'model' | 'requests' | 'success' | 'tokPerSec' | 'ttfb' | 'auto' | 'smart'
+type SortDir = 'asc' | 'desc'
+
+const sortLabels: Record<SortKey, string> = {
+  model: 'Model',
+  requests: 'Reqs',
+  success: 'Success',
+  tokPerSec: 'Tok/s',
+  ttfb: 'TTFB',
+  auto: 'Auto',
+  smart: 'Smart',
+}
+
+function sortValue(entry: FallbackEntry, key: SortKey): string | number {
+  if (key === 'model') return entry.displayName.toLowerCase()
+  if (key === 'requests') return entry.totalRequests
+  if (key === 'success') return entry.successRate ?? -1
+  if (key === 'tokPerSec') return entry.tokPerSec ?? -1
+  if (key === 'ttfb') return entry.avgTtfbMs ?? Number.POSITIVE_INFINITY
+  if (key === 'smart') return entry.smartScore
+  return entry.effectiveScore
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  activeKey,
+  sortDir,
+  onSort,
+  className = '',
+}: {
+  label: string
+  sortKey: SortKey
+  activeKey: SortKey
+  sortDir: SortDir
+  onSort: (key: SortKey) => void
+  className?: string
+}) {
+  const active = sortKey === activeKey
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(sortKey)}
+      className={`text-xs font-medium text-muted-foreground hover:text-foreground transition-colors ${className}`}
+    >
+      {label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+    </button>
+  )
 }
 
 const platformColors: Record<string, string> = {
@@ -184,7 +235,11 @@ function ModelRow({
         </div>
         <div className="text-right w-16">
           <div className="text-sm font-mono tabular-nums text-muted-foreground">{entry.score.toFixed(3)}</div>
-          <div className="text-xs text-muted-foreground">score</div>
+          <div className="text-xs text-muted-foreground">auto</div>
+        </div>
+        <div className="text-right w-16">
+          <div className="text-sm font-mono tabular-nums text-muted-foreground">{entry.smartScore.toFixed(3)}</div>
+          <div className="text-xs text-muted-foreground">smart</div>
         </div>
       </div>
 
@@ -198,6 +253,8 @@ function ModelRow({
 
 export default function FallbackPage() {
   const queryClient = useQueryClient()
+  const [sortKey, setSortKey] = useState<SortKey>('auto')
+  const [sortDir, setSortDir] = useState<SortDir>('desc')
 
   const { data: entries = [], isLoading } = useQuery<FallbackEntry[]>({
     queryKey: ['fallback'],
@@ -217,8 +274,27 @@ export default function FallbackPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['fallback'] }),
   })
 
-  const displayEntries = entries.filter(e => e.keyCount > 0)
+  const displayEntries = entries
+    .filter(e => e.keyCount > 0)
+    .sort((a, b) => {
+      const aValue = sortValue(a, sortKey)
+      const bValue = sortValue(b, sortKey)
+      const result = typeof aValue === 'string' && typeof bValue === 'string'
+        ? aValue.localeCompare(bValue)
+        : Number(aValue) - Number(bValue)
+      return sortDir === 'asc' ? result : -result
+    })
   const unconfiguredPlatforms = [...new Set(entries.filter(e => e.keyCount === 0).map(e => e.platform))]
+
+  function handleSort(key: SortKey) {
+    if (key === sortKey) {
+      setSortDir(dir => dir === 'asc' ? 'desc' : 'asc')
+      return
+    }
+
+    setSortKey(key)
+    setSortDir(key === 'model' || key === 'ttfb' ? 'asc' : 'desc')
+  }
 
   return (
     <div>
@@ -242,7 +318,28 @@ export default function FallbackPage() {
           </div>
         ) : (
           <>
-            <div className="rounded-lg border divide-y overflow-hidden">
+            <div className="rounded-lg border overflow-hidden">
+              <div className="flex items-center gap-3 px-4 py-2 bg-muted/40 border-b">
+                <span className="w-5 shrink-0" />
+                <SortHeader
+                  label={sortLabels.model}
+                  sortKey="model"
+                  activeKey={sortKey}
+                  sortDir={sortDir}
+                  onSort={handleSort}
+                  className="flex-1 min-w-0 text-left"
+                />
+                <div className="flex items-center gap-6 shrink-0">
+                  <SortHeader label={sortLabels.requests} sortKey="requests" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-14 text-right" />
+                  <SortHeader label={sortLabels.success} sortKey="success" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-20 text-right" />
+                  <SortHeader label={sortLabels.tokPerSec} sortKey="tokPerSec" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-16 text-right" />
+                  <SortHeader label={sortLabels.ttfb} sortKey="ttfb" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-20 text-right" />
+                  <SortHeader label={sortLabels.auto} sortKey="auto" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-16 text-right" />
+                  <SortHeader label={sortLabels.smart} sortKey="smart" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-16 text-right" />
+                </div>
+                <span className="w-9 shrink-0 text-xs font-medium text-muted-foreground text-right">On</span>
+              </div>
+              <div className="divide-y">
               {displayEntries.map((entry, index) => (
                 <ModelRow
                   key={entry.modelDbId}
@@ -251,6 +348,7 @@ export default function FallbackPage() {
                   onToggle={(id, enabled) => toggleMutation.mutate({ modelDbId: id, enabled })}
                 />
               ))}
+              </div>
             </div>
 
             {unconfiguredPlatforms.length > 0 && (

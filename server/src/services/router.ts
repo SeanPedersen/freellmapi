@@ -10,6 +10,7 @@ interface ChainRow {
   platform: string;
   model_id: string;
   display_name: string;
+  intelligence_rank: number;
   rpm_limit: number | null;
   rpd_limit: number | null;
   tpm_limit: number | null;
@@ -41,6 +42,9 @@ const PRIOR_FAILURE = 2;
 
 // Weight of the normalized speed signal added on top of the sampled success rate.
 const SPEED_WEIGHT = 0.3;
+const SMART_SPEED_FACTOR = 0.2;
+const SMART_TTFB_FACTOR = 0.2;
+const SMART_INTELLIGENCE_WEIGHT = 0.35;
 
 // Optimistic speed prior for models with no successful history yet.
 const SPEED_PRIOR = 1.0;
@@ -145,6 +149,8 @@ interface ModelStats {
   avgTtfbMs: number | null; // avg TTFB across successful requests (null if no data)
 }
 
+export type RoutingMode = 'balanced' | 'smart';
+
 let statsCache: Map<string, ModelStats> | null = null;
 let statsCacheTime = 0;
 let maxTokPerSec = 0;
@@ -203,6 +209,30 @@ export function getAnalyticsScore(platform: string, modelId: string): number {
   return bayesRate + speed + ttfbScore;
 }
 
+export function getSmartAnalyticsScore(
+  platform: string,
+  modelId: string,
+  intelligenceRank: number,
+  minIntelligenceRank: number,
+  maxIntelligenceRank: number,
+): number {
+  const stats = statsCache?.get(`${platform}:${modelId}`);
+  const total = stats?.total ?? 0;
+  const successes = stats?.successes ?? 0;
+  const bayesRate = (successes + PRIOR_SUCCESS) / (total + PRIOR_SUCCESS + PRIOR_FAILURE);
+  const speed = (stats && stats.tokPerSec > 0)
+    ? speedContribution(stats.tokPerSec, maxTokPerSec) * SMART_SPEED_FACTOR
+    : 0;
+  const ttfbScore = (stats && stats.avgTtfbMs !== null)
+    ? ttfbContribution(stats.avgTtfbMs) * SMART_TTFB_FACTOR
+    : 0;
+  const intelligenceRange = maxIntelligenceRank - minIntelligenceRank;
+  const intelligenceScore = intelligenceRange <= 0
+    ? 1
+    : 1 - ((intelligenceRank - minIntelligenceRank) / intelligenceRange);
+  return bayesRate + SMART_INTELLIGENCE_WEIGHT * intelligenceScore + speed + ttfbScore;
+}
+
 // Stochastic score used for routing — samples from the Beta posterior so that
 // models are chosen probabilistically rather than always picking the single best.
 function thompsonSampleScore(platform: string, modelId: string): number {
@@ -219,6 +249,23 @@ function thompsonSampleScore(platform: string, modelId: string): number {
     ? TTFB_WEIGHT * TTFB_PRIOR
     : ttfbContribution(stats.avgTtfbMs);
   return sampleBeta(alpha, beta) + speed + ttfbScore;
+}
+
+function smartSampleScore(entry: ChainRow, minIntelligenceRank: number, maxIntelligenceRank: number): number {
+  const stats = statsCache?.get(`${entry.platform}:${entry.model_id}`);
+  const alpha = (stats?.successes ?? 0) + PRIOR_SUCCESS;
+  const beta  = ((stats?.total ?? 0) - (stats?.successes ?? 0)) + PRIOR_FAILURE;
+  const speed = stats === undefined
+    ? SPEED_WEIGHT * SPEED_PRIOR * SMART_SPEED_FACTOR
+    : (stats.tokPerSec > 0 ? speedContribution(stats.tokPerSec, maxTokPerSec) * SMART_SPEED_FACTOR : 0);
+  const ttfbScore = stats === undefined
+    ? TTFB_WEIGHT * TTFB_PRIOR * SMART_TTFB_FACTOR
+    : ttfbContribution(stats.avgTtfbMs) * SMART_TTFB_FACTOR;
+  const intelligenceRange = maxIntelligenceRank - minIntelligenceRank;
+  const intelligenceScore = intelligenceRange <= 0
+    ? 1
+    : 1 - ((entry.intelligence_rank - minIntelligenceRank) / intelligenceRange);
+  return sampleBeta(alpha, beta) + SMART_INTELLIGENCE_WEIGHT * intelligenceScore + speed + ttfbScore;
 }
 
 /**
@@ -361,8 +408,14 @@ export function getAllPenalties(): Array<{ modelDbId: number; count: number; pen
  * @param estimatedTokens - estimated total tokens for rate-limit pre-check
  * @param skipKeys - "platform:modelId:keyId" triples to skip (already failed this request)
  * @param preferredModelDbId - pin this model to position 0 (sticky session)
+ * @param routingMode - balanced optimizes success+latency; smart adds intelligence priority
  */
-export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, preferredModelDbId?: number): RouteResult {
+export function routeRequest(
+  estimatedTokens = 1000,
+  skipKeys?: Set<string>,
+  preferredModelDbId?: number,
+  routingMode: RoutingMode = 'balanced',
+): RouteResult {
   const db = getDb();
 
   // Refresh analytics cache (no-op if called within the TTL window)
@@ -370,17 +423,22 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
 
   const chain = db.prepare(`
     SELECT fc.model_db_id,
-           m.platform, m.model_id, m.display_name,
+           m.platform, m.model_id, m.display_name, m.intelligence_rank,
            m.rpm_limit, m.rpd_limit, m.tpm_limit, m.tpd_limit
     FROM fallback_config fc
     JOIN models m ON m.id = fc.model_db_id AND m.enabled = 1
     WHERE fc.enabled = 1
   `).all() as ChainRow[];
 
+  const intelligenceRanks = chain.map(entry => entry.intelligence_rank);
+  const minIntelligenceRank = Math.min(...intelligenceRanks);
+  const maxIntelligenceRank = Math.max(...intelligenceRanks);
   const sorted = chain.map(entry => ({
     ...entry,
     effectiveScore:
-      thompsonSampleScore(entry.platform, entry.model_id)
+      (routingMode === 'smart'
+        ? smartSampleScore(entry, minIntelligenceRank, maxIntelligenceRank)
+        : thompsonSampleScore(entry.platform, entry.model_id))
       - getPenalty(entry.model_db_id) * PENALTY_SCORE_WEIGHT,
   })).sort((a, b) => b.effectiveScore - a.effectiveScore);
 

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { getDb } from '../db/index.js';
-import { getAllPenalties, getAnalyticsScores, getAnalyticsScore, refreshStatsCache, PENALTY_SCORE_WEIGHT } from '../services/router.js';
+import { getAllPenalties, getAnalyticsScores, getAnalyticsScore, getSmartAnalyticsScore, refreshStatsCache, PENALTY_SCORE_WEIGHT } from '../services/router.js';
 
 export const fallbackRouter: Router = Router();
 
@@ -11,7 +11,7 @@ fallbackRouter.get('/', (_req: Request, res: Response) => {
   refreshStatsCache(db, true);
   const rows = db.prepare(`
     SELECT fc.model_db_id, fc.enabled,
-           m.platform, m.model_id, m.display_name,
+           m.platform, m.model_id, m.display_name, m.intelligence_rank,
            m.rpm_limit, m.rpd_limit, m.monthly_token_budget
     FROM fallback_config fc
     JOIN models m ON m.id = fc.model_db_id AND m.enabled = 1
@@ -30,14 +30,26 @@ fallbackRouter.get('/', (_req: Request, res: Response) => {
   const analyticsScores = getAnalyticsScores();
   const analyticsMap = new Map(analyticsScores.map(s => [`${s.platform}:${s.modelId}`, s]));
 
+  const intelligenceRanks = rows.map(r => r.intelligence_rank);
+  const minIntelligenceRank = Math.min(...intelligenceRanks);
+  const maxIntelligenceRank = Math.max(...intelligenceRanks);
+
   const result = rows.map(r => {
     const penalty = penaltyMap.get(r.model_db_id);
     const analytics = analyticsMap.get(`${r.platform}:${r.model_id}`);
     const score = getAnalyticsScore(r.platform, r.model_id);
+    const smartScore = getSmartAnalyticsScore(
+      r.platform,
+      r.model_id,
+      r.intelligence_rank,
+      minIntelligenceRank,
+      maxIntelligenceRank,
+    );
     const penaltyVal = penalty?.penalty ?? 0;
     return {
       modelDbId: r.model_db_id,
       score: Math.round(score * 1000) / 1000,
+      smartScore: Math.round(smartScore * 1000) / 1000,
       effectiveScore: Math.round((score - penaltyVal * PENALTY_SCORE_WEIGHT) * 1000) / 1000,
       penalty: penaltyVal,
       rateLimitHits: penalty?.count ?? 0,

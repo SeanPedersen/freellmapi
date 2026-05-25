@@ -3,7 +3,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import type { ChatCompletionChunk, ChatCompletionResponse, ChatMessage, ChatToolCall, ChatToolDefinition } from '@freellmapi/shared/types.js';
-import { routeRequest, recordSuccess, type RouteResult } from '../services/router.js';
+import { routeRequest, recordSuccess, type RouteResult, type RoutingMode } from '../services/router.js';
 import { recordRequest, recordTokens, setCooldown } from '../services/ratelimit.js';
 import { getDb, getUnifiedApiKey } from '../db/index.js';
 import { extractBearerToken, timingSafeStringEqual } from '../lib/secrets.js';
@@ -21,18 +21,18 @@ const RESPONSE_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_RESPONSE_SESSIONS = 500;
 const MAX_MODEL_RESPONSE_LOG_CHARS = 6000;
 
-function getSessionKey(messages: ChatMessage[]): string {
+function getSessionKey(messages: ChatMessage[], routingMode: RoutingMode): string {
   // Use the first user message as session identifier — clients like Hermes
   // re-send the full conversation each turn, so the first user message is
   // stable across turns. Hash the FULL message (not a 100-char slice) so
   // distinct conversations with identical openings don't collide.
   const firstUser = messages.find(m => m.role === 'user');
   if (!firstUser || typeof firstUser.content !== 'string') return '';
-  return crypto.createHash('sha1').update(firstUser.content).digest('hex');
+  return crypto.createHash('sha1').update(`${routingMode}:${firstUser.content}`).digest('hex');
 }
 
-function getStickyModel(messages: ChatMessage[]): number | undefined {
-  const key = getSessionKey(messages);
+function getStickyModel(messages: ChatMessage[], routingMode: RoutingMode): number | undefined {
+  const key = getSessionKey(messages, routingMode);
   if (!key) return undefined;
 
   const entry = stickySessionMap.get(key);
@@ -51,16 +51,16 @@ function getStickyModel(messages: ChatMessage[]): number | undefined {
   return entry.modelDbId;
 }
 
-function clearStickyModel(messages: ChatMessage[]) {
-  const key = getSessionKey(messages);
+function clearStickyModel(messages: ChatMessage[], routingMode: RoutingMode) {
+  const key = getSessionKey(messages, routingMode);
   if (!key) return;
   if (!stickySessionMap.has(key)) return;
   stickySessionMap.delete(key);
   console.log(`[Sticky] cleared key=${key.slice(0, 8)} | msgs=${messages.length} → non-retryable error`);
 }
 
-function setStickyModel(messages: ChatMessage[], modelDbId: number) {
-  const key = getSessionKey(messages);
+function setStickyModel(messages: ChatMessage[], modelDbId: number, routingMode: RoutingMode) {
+  const key = getSessionKey(messages, routingMode);
   if (!key) return;
   stickySessionMap.set(key, { modelDbId, lastUsed: Date.now() });
   console.log(`[Sticky] set key=${key.slice(0, 8)} | msgs=${messages.length} → modelDbId=${modelDbId}`);
@@ -74,6 +74,7 @@ function setStickyModel(messages: ChatMessage[], modelDbId: number) {
 }
 
 const AUTO_MODEL_ID = 'freellmapi/auto';
+const AUTO_SMART_MODEL_ID = 'freellmapi/auto-smart';
 
 proxyRouter.use((req, res, next) => {
   const token = extractBearerToken(req.headers.authorization);
@@ -100,7 +101,15 @@ proxyRouter.get('/models', (_req: Request, res: Response) => {
         object: 'model',
         created: 0,
         owned_by: 'freellmapi',
-        name: 'Auto (Smart Router)',
+        name: 'Auto (Balanced Router)',
+        context_window: 128000,
+      },
+      {
+        id: AUTO_SMART_MODEL_ID,
+        object: 'model',
+        created: 0,
+        owned_by: 'freellmapi',
+        name: 'Auto Smart (Intelligence Router)',
         context_window: 128000,
       },
       ...models.map(m => ({
@@ -118,8 +127,8 @@ proxyRouter.get('/models', (_req: Request, res: Response) => {
 // OpenAI-compatible GET /models/:id endpoint
 proxyRouter.get(/^\/models\/(.+)$/, (req: Request, res: Response) => {
   const id = (req.params as any)[0] as string;
-  if (id === AUTO_MODEL_ID) {
-    res.json({ id: AUTO_MODEL_ID, object: 'model', created: 0, owned_by: 'freellmapi' });
+  if (id === AUTO_MODEL_ID || id === AUTO_SMART_MODEL_ID) {
+    res.json({ id, object: 'model', created: 0, owned_by: 'freellmapi' });
     return;
   }
   const db = getDb();
@@ -840,7 +849,8 @@ async function handleChatCompletion(
   }
 
   const { model: rawModel, temperature, max_tokens, top_p, stream, tools, tool_choice, parallel_tool_calls } = parsed.data;
-  const requestedModel = rawModel === AUTO_MODEL_ID ? undefined : rawModel;
+  const routingMode: RoutingMode = rawModel === AUTO_SMART_MODEL_ID ? 'smart' : 'balanced';
+  const requestedModel = rawModel === AUTO_MODEL_ID || rawModel === AUTO_SMART_MODEL_ID ? undefined : rawModel;
   const messages: ChatMessage[] = parsed.data.messages.map((m): ChatMessage => {
     if (m.role === 'assistant') {
       return {
@@ -913,7 +923,7 @@ async function handleChatCompletion(
       return;
     }
   } else {
-    preferredModel = getStickyModel(messages);
+    preferredModel = getStickyModel(messages, routingMode);
   }
 
   // Retry loop: on 429/rate limit, skip that model+key and try the next one
@@ -923,7 +933,7 @@ async function handleChatCompletion(
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     let route: RouteResult;
     try {
-      route = routeRequest(estimatedTotal, skipKeys.size > 0 ? skipKeys : undefined, preferredModel);
+      route = routeRequest(estimatedTotal, skipKeys.size > 0 ? skipKeys : undefined, preferredModel, routingMode);
     } catch (err: any) {
       // No more models available
       if (lastError) {
@@ -1018,7 +1028,7 @@ async function handleChatCompletion(
 
           recordTokens(route.platform, route.modelId, route.keyId, estimatedInputTokens + totalOutputTokens);
           recordSuccess(route.modelDbId);
-          setStickyModel(messages, route.modelDbId);
+          setStickyModel(messages, route.modelDbId, routingMode);
           logRequest(route.platform, route.modelId, 'success', estimatedInputTokens, totalOutputTokens, Date.now() - start, ttfbMs, null);
           return;
         } catch (streamErr: any) {
@@ -1061,7 +1071,7 @@ async function handleChatCompletion(
         const totalTokens = result.usage?.total_tokens ?? 0;
         recordTokens(route.platform, route.modelId, route.keyId, totalTokens);
         recordSuccess(route.modelDbId);
-        setStickyModel(messages, route.modelDbId);
+        setStickyModel(messages, route.modelDbId, routingMode);
 
         res.setHeader('X-Routed-Via', `${route.platform}/${route.modelId}`);
         if (attempt > 0) res.setHeader('X-Fallback-Attempts', String(attempt));
@@ -1093,7 +1103,7 @@ async function handleChatCompletion(
 
       // Non-retryable error (auth, etc.): don't retry, but clear sticky so the
       // next request in this conversation isn't pinned to the broken model.
-      clearStickyModel(messages);
+      clearStickyModel(messages, routingMode);
       res.status(502).json({
         error: {
           message: `Provider error (${route.displayName}): ${err.message}`,
