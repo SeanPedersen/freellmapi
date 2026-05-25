@@ -1042,6 +1042,8 @@ async function handleChatCompletion(
         // mid-stream errors emit an `error` SSE frame so the client sees a real signal
         // instead of a silently truncated stream.
         let totalOutputTokens = 0;
+        let streamedText = '';
+        let sawToolCalls = false;
         let streamStarted = false;
         let ttfbMs: number | null = null;
         try {
@@ -1063,10 +1065,13 @@ async function handleChatCompletion(
               }
               streamStarted = true;
             }
+            const deltaToolCalls = chunk.choices[0]?.delta?.tool_calls ?? [];
+            if (deltaToolCalls.length > 0) sawToolCalls = true;
             if (responseStreamContext) {
               totalOutputTokens += writeResponseStreamChunk(res, responseStreamContext, chunk);
             } else {
               const text = chunk.choices[0]?.delta?.content ?? '';
+              if (text) streamedText += text;
               totalOutputTokens += Math.ceil(text.length / 4);
               res.write(`data: ${JSON.stringify(chunk)}\n\n`);
             }
@@ -1080,6 +1085,14 @@ async function handleChatCompletion(
               writeResponseStreamStart(res, responseStreamContext, route.modelId);
             }
           }
+
+          const hasMeaningfulStreamOutput = responseStreamContext
+            ? (responseStreamContext.outputText.trim().length > 0 || responseStreamContext.toolCalls.size > 0)
+            : (streamedText.trim().length > 0 || sawToolCalls);
+          if (!hasMeaningfulStreamOutput) {
+            throw Object.assign(new Error(`Provider returned an empty streamed assistant response from ${route.displayName}`), { status: 502 });
+          }
+
           if (responseStreamContext) {
             writeResponseStreamEnd(res, responseStreamContext, route.modelId, estimatedInputTokens, totalOutputTokens);
             logFinalModelResponse(route, {

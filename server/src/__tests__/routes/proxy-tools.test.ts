@@ -239,6 +239,70 @@ describe('Proxy tool-calling support', () => {
     expect(new Set(seenModels).size).toBeGreaterThan(1);
   });
 
+  it('retries streaming requests when the provider emits no assistant output', async () => {
+    const origFetch = global.fetch;
+    const seenModels: string[] = [];
+    let firstAttempt = true;
+
+    vi.spyOn(global, 'fetch').mockImplementation(async (url, init) => {
+      const urlStr = typeof url === 'string' ? url : url.toString();
+      if (urlStr.startsWith('http://127.0.0.1') || urlStr.startsWith('http://localhost')) {
+        return origFetch(url, init);
+      }
+      if (!urlStr.includes('/chat/completions')) return origFetch(url, init);
+
+      const body = JSON.parse((init as any).body);
+      seenModels.push(body.model);
+
+      if (firstAttempt) {
+        firstAttempt = false;
+        const encoder = new TextEncoder();
+        return {
+          ok: true,
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+              controller.close();
+            },
+          }),
+        } as any;
+      }
+
+      const chunks = [
+        {
+          id: 'chunk-1',
+          object: 'chat.completion.chunk',
+          created: 123,
+          model: body.model,
+          choices: [{ index: 0, delta: { role: 'assistant', content: 'streamed answer' }, finish_reason: 'stop' }],
+        },
+      ];
+      const encoder = new TextEncoder();
+      return {
+        ok: true,
+        body: new ReadableStream({
+          start(controller) {
+            for (const chunk of chunks) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+            }
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        }),
+      } as any;
+    });
+
+    const { status, raw } = await request(app, 'POST', '/v1/chat/completions', {
+      messages: [{ role: 'user', content: 'Say something useful.' }],
+      stream: true,
+    });
+
+    expect(status).toBe(200);
+    expect(raw).toContain('streamed answer');
+    expect(seenModels.length).toBeGreaterThan(1);
+    expect(new Set(seenModels).size).toBeGreaterThan(1);
+  });
+
   it('accepts assistant tool_calls + tool messages in follow-up turns', async () => {
     const origFetch = global.fetch;
     let providerBody: any = null;
