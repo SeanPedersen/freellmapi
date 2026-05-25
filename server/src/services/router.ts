@@ -459,6 +459,7 @@ export function routeRequest(
   skipKeys?: Set<string>,
   preferredModelDbId?: number,
   routingMode: RoutingMode = 'balanced',
+  skipModels?: Set<number>,
 ): RouteResult {
   const db = getDb();
 
@@ -502,6 +503,8 @@ export function routeRequest(
   }
 
   for (const entry of sorted) {
+    if (skipModels?.has(entry.model_db_id)) continue;
+
     const provider = getProvider(entry.platform as any);
     if (!provider) continue;
 

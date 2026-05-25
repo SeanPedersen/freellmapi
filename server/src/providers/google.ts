@@ -240,8 +240,7 @@ export class GoogleProvider extends BaseProvider {
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(`Google API error ${res.status}: ${(err as any).error?.message ?? res.statusText}`);
+      throw await this.createApiError(res);
     }
 
     const data = await res.json() as GeminiResponse;
@@ -303,8 +302,7 @@ export class GoogleProvider extends BaseProvider {
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(`Google API error ${res.status}: ${(err as any).error?.message ?? res.statusText}`);
+      throw await this.createApiError(res);
     }
 
     const reader = res.body?.getReader();

@@ -348,16 +348,41 @@ function isChatToolDefinition(tool: ResponseTool): tool is ChatToolDefinition {
   return 'function' in tool;
 }
 
-function isResponseFunctionCallOutput(item: ResponseInputItem): item is z.infer<typeof responseFunctionCallOutputSchema> {
-  return typeof item === 'object' && item !== null && 'type' in item && item.type === 'function_call_output';
+function getErrorStatus(err: any): number | undefined {
+  const status = err?.status ?? err?.response?.status;
+  return typeof status === 'number' ? status : undefined;
 }
 
-function isResponseFunctionCall(item: ResponseInputItem): item is z.infer<typeof responseFunctionCallSchema> {
-  return typeof item === 'object' && item !== null && 'type' in item && item.type === 'function_call';
+function getErrorMessage(err: any): string {
+  return String(err?.message ?? err?.error?.message ?? 'Unknown provider error');
+}
+
+function isRateLimitError(err: any): boolean {
+  const status = getErrorStatus(err);
+  if (status === 429) return true;
+
+  const msg = getErrorMessage(err).toLowerCase();
+  return msg.includes('rate limit') || msg.includes('too many requests')
+    || msg.includes('quota') || msg.includes('resource_exhausted');
+}
+
+function isAuthError(err: any): boolean {
+  const status = getErrorStatus(err);
+  if (status === 401 || status === 403) return true;
+
+  const msg = getErrorMessage(err).toLowerCase();
+  return msg.includes('unauthorized') || msg.includes('forbidden') || msg.includes('invalid api key');
 }
 
 function isRetryableError(err: any): boolean {
-  const msg = (err.message ?? '').toLowerCase();
+  const status = getErrorStatus(err);
+  if (status === 401 || status === 403) return true;
+  if (status === 429 || status === 400 || status === 404 || status === 408 || status === 409
+    || status === 422 || status === 500 || status === 502 || status === 503 || status === 504) {
+    return true;
+  }
+
+  const msg = getErrorMessage(err).toLowerCase();
   return msg.includes('429') || msg.includes('rate limit') || msg.includes('too many requests')
     || msg.includes('quota') || msg.includes('resource_exhausted')
     || msg.includes('aborted') || msg.includes('timeout') || msg.includes('etimedout')
@@ -368,6 +393,24 @@ function isRetryableError(err: any): boolean {
     || msg.includes('404') || msg.includes('no longer available') || msg.includes('model not found')
     // 400 from a provider means provider-specific incompatibility (e.g. unsupported schema fields) — fall back
     || msg.includes('400') || msg.includes('bad request') || msg.includes('invalid json payload');
+}
+
+function shouldSkipModelOnRetry(err: any): boolean {
+  return !isRateLimitError(err) && !isAuthError(err);
+}
+
+function summarizeProviderError(err: any): string {
+  const status = getErrorStatus(err);
+  const message = getErrorMessage(err).replace(/\s+/g, ' ').trim();
+  return `${status ? `${status} ` : ''}${message}`.slice(0, 240);
+}
+
+function isResponseFunctionCallOutput(item: ResponseInputItem): item is z.infer<typeof responseFunctionCallOutputSchema> {
+  return typeof item === 'object' && item !== null && 'type' in item && item.type === 'function_call_output';
+}
+
+function isResponseFunctionCall(item: ResponseInputItem): item is z.infer<typeof responseFunctionCallSchema> {
+  return typeof item === 'object' && item !== null && 'type' in item && item.type === 'function_call';
 }
 
 function extractResponseText(content: z.infer<typeof responseInputMessageSchema>['content']): string {
@@ -788,9 +831,11 @@ function writeResponseStreamEnd(res: Response, context: ResponsesStreamContext, 
 proxyRouter.post('/responses', async (req: Request, res: Response) => {
   const parsed = responseCreateSchema.safeParse(req.body);
   if (!parsed.success) {
+    const message = `Invalid request: ${parsed.error.errors.map(e => e.message).join(', ')}`;
+    console.warn(`[Proxy] /responses rejected: ${message}`);
     res.status(400).json({
       error: {
-        message: `Invalid request: ${parsed.error.errors.map(e => e.message).join(', ')}`,
+        message,
         type: 'invalid_request_error',
       },
     });
@@ -839,9 +884,11 @@ async function handleChatCompletion(
   // Validate request
   const parsed = chatCompletionSchema.safeParse(body);
   if (!parsed.success) {
+    const message = `Invalid request: ${parsed.error.errors.map(e => e.message).join(', ')}`;
+    console.warn(`[Proxy] /chat/completions rejected: ${message}`);
     res.status(400).json({
       error: {
-        message: `Invalid request: ${parsed.error.errors.map(e => e.message).join(', ')}`,
+        message,
         type: 'invalid_request_error',
       },
     });
@@ -913,9 +960,11 @@ async function handleChatCompletion(
     } else {
       const disabled = db.prepare('SELECT id FROM models WHERE model_id = ?').get(requestedModel) as { id: number } | undefined;
       const reason = disabled ? 'is disabled' : 'is not in the catalog';
+      const message = `Model '${requestedModel}' ${reason}. Omit the 'model' field to auto-route, or call /v1/models for the available list.`;
+      console.warn(`[Proxy] explicit model rejected: ${message}`);
       res.status(400).json({
         error: {
-          message: `Model '${requestedModel}' ${reason}. Omit the 'model' field to auto-route, or call /v1/models for the available list.`,
+          message,
           type: 'invalid_request_error',
           code: 'model_not_found',
         },
@@ -926,21 +975,32 @@ async function handleChatCompletion(
     preferredModel = getStickyModel(messages, routingMode);
   }
 
-  // Retry loop: on 429/rate limit, skip that model+key and try the next one
+  // Retry loop: skip bad keys and, for non-rate-limit errors, skip the model
+  // entirely so the fallback chain can move to a different provider/model.
   const skipKeys = new Set<string>();
+  const skipModels = new Set<number>();
   let lastError: any = null;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     let route: RouteResult;
     try {
-      route = routeRequest(estimatedTotal, skipKeys.size > 0 ? skipKeys : undefined, preferredModel, routingMode);
+      route = routeRequest(
+        estimatedTotal,
+        skipKeys.size > 0 ? skipKeys : undefined,
+        preferredModel,
+        routingMode,
+        skipModels.size > 0 ? skipModels : undefined,
+      );
     } catch (err: any) {
       // No more models available
       if (lastError) {
-        res.status(429).json({
+        const status = isRateLimitError(lastError) ? 429 : 502;
+        const type = status === 429 ? 'rate_limit_error' : 'provider_error';
+        const prefix = status === 429 ? 'All models rate-limited' : 'All fallback attempts failed';
+        res.status(status).json({
           error: {
-            message: `All models rate-limited. Last error: ${lastError.message}`,
-            type: 'rate_limit_error',
+            message: `${prefix}. Last error: ${getErrorMessage(lastError)}`,
+            type,
           },
         });
       } else {
@@ -1092,12 +1152,16 @@ async function handleChatCompletion(
       logRequest(route.platform, route.modelId, 'error', estimatedInputTokens, 0, latency, null, err.message);
 
       if (isRetryableError(err)) {
-        // Put this model+key on cooldown and try the next one
         const skipId = `${route.platform}:${route.modelId}:${route.keyId}`;
         skipKeys.add(skipId);
-        setCooldown(route.platform, route.modelId, route.keyId, 120_000);
+        if (shouldSkipModelOnRetry(err)) {
+          skipModels.add(route.modelDbId);
+        }
+        if (isRateLimitError(err)) {
+          setCooldown(route.platform, route.modelId, route.keyId, 120_000);
+        }
         lastError = err;
-        console.log(`[Proxy] ${err.message.slice(0, 60)} from ${route.displayName}, falling back (attempt ${attempt + 1}/${MAX_RETRIES})`);
+        console.warn(`[Proxy] retryable ${summarizeProviderError(err)} from ${route.displayName}/${route.modelId}, fallback (attempt ${attempt + 1}/${MAX_RETRIES})`);
         continue;
       }
 
@@ -1106,7 +1170,7 @@ async function handleChatCompletion(
       clearStickyModel(messages, routingMode);
       res.status(502).json({
         error: {
-          message: `Provider error (${route.displayName}): ${err.message}`,
+          message: `Provider error (${route.displayName}): ${getErrorMessage(err)}`,
           type: 'provider_error',
         },
       });
@@ -1115,10 +1179,15 @@ async function handleChatCompletion(
   }
 
   // Exhausted all retries
-  res.status(429).json({
+  const status = isRateLimitError(lastError) ? 429 : 502;
+  const type = status === 429 ? 'rate_limit_error' : 'provider_error';
+  const message = status === 429
+    ? `All models rate-limited after ${MAX_RETRIES} attempts. Last: ${getErrorMessage(lastError)}`
+    : `All fallback attempts failed after ${MAX_RETRIES} attempts. Last: ${getErrorMessage(lastError)}`;
+  res.status(status).json({
     error: {
-      message: `All models rate-limited after ${MAX_RETRIES} attempts. Last: ${lastError?.message}`,
-      type: 'rate_limit_error',
+      message,
+      type,
     },
   });
 }

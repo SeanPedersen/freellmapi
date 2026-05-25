@@ -17,6 +17,12 @@ export interface CompletionOptions {
   parallel_tool_calls?: boolean;
 }
 
+export interface ProviderApiError extends Error {
+  status?: number;
+  provider?: string;
+  responseBody?: unknown;
+}
+
 // Recursively removes `additionalProperties` from a JSON Schema object.
 // Cohere and Google do not support this field in tool parameter schemas.
 export function stripAdditionalProperties(schema: Record<string, unknown>): Record<string, unknown> {
@@ -72,6 +78,43 @@ export abstract class BaseProvider {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  protected async createApiError(res: Response): Promise<ProviderApiError> {
+    const body = await this.readErrorBody(res);
+    const message = this.extractErrorMessage(body, res.statusText);
+    const error = new Error(`${this.name} API error ${res.status}: ${message}`) as ProviderApiError;
+    error.status = res.status;
+    error.provider = this.name;
+    error.responseBody = body;
+    return error;
+  }
+
+  private async readErrorBody(res: Response): Promise<unknown> {
+    if (typeof res.text === 'function') {
+      const text = await res.text().catch(() => '');
+      if (!text) return null;
+
+      try {
+        return JSON.parse(text) as unknown;
+      } catch {
+        return text.slice(0, 1000);
+      }
+    }
+
+    if (typeof res.json === 'function') {
+      return await res.json().catch(() => null) as unknown;
+    }
+
+    return null;
+  }
+
+  private extractErrorMessage(body: unknown, fallback: string): string {
+    if (typeof body === 'string') return body || fallback;
+    if (!body || typeof body !== 'object') return fallback;
+
+    const err = body as { error?: { message?: string }; errors?: Array<{ message?: string }>; message?: string };
+    return err.error?.message ?? err.errors?.[0]?.message ?? err.message ?? fallback;
   }
 
   protected makeId(): string {

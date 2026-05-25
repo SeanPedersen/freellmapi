@@ -115,6 +115,69 @@ describe('Proxy tool-calling support', () => {
     expect(body.choices[0].message.tool_calls[0].function.name).toBe('get_weather');
   });
 
+  it('falls back to another model when the first auto-route returns 400', async () => {
+    const origFetch = global.fetch;
+    let firstModel: string | null = null;
+    const seenModels: string[] = [];
+
+    vi.spyOn(global, 'fetch').mockImplementation(async (url, init) => {
+      const urlStr = typeof url === 'string' ? url : url.toString();
+      if (urlStr.startsWith('http://127.0.0.1') || urlStr.startsWith('http://localhost')) {
+        return origFetch(url, init);
+      }
+      if (!urlStr.includes('/chat/completions')) return origFetch(url, init);
+
+      const body = JSON.parse((init as any).body);
+      seenModels.push(body.model);
+
+      if (firstModel === null) {
+        firstModel = body.model;
+        return {
+          ok: false,
+          status: 400,
+          statusText: 'Bad Request',
+          json: () => Promise.resolve({ error: { message: 'unsupported field' } }),
+          text: () => Promise.resolve(JSON.stringify({ error: { message: 'unsupported field' } })),
+        } as any;
+      }
+
+      if (body.model === firstModel) {
+        return {
+          ok: false,
+          status: 400,
+          statusText: 'Bad Request',
+          json: () => Promise.resolve({ error: { message: 'unsupported field' } }),
+          text: () => Promise.resolve(JSON.stringify({ error: { message: 'unsupported field' } })),
+        } as any;
+      }
+
+      return {
+        ok: true,
+        json: () => Promise.resolve({
+          id: 'chatcmpl-fallback',
+          object: 'chat.completion',
+          created: 123,
+          model: body.model,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'fallback ok' },
+            finish_reason: 'stop',
+          }],
+          usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+        }),
+      } as any;
+    });
+
+    const { status, body } = await request(app, 'POST', '/v1/chat/completions', {
+      messages: [{ role: 'user', content: 'Say fallback test.' }],
+    });
+
+    expect(status).toBe(200);
+    expect(body.choices[0].message.content).toBe('fallback ok');
+    expect(seenModels.length).toBeGreaterThan(1);
+    expect(new Set(seenModels).size).toBeGreaterThan(1);
+  });
+
   it('accepts assistant tool_calls + tool messages in follow-up turns', async () => {
     const origFetch = global.fetch;
     let providerBody: any = null;

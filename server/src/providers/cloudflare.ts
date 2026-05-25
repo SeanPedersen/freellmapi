@@ -56,8 +56,7 @@ export class CloudflareProvider extends BaseProvider {
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(`Cloudflare API error ${res.status}: ${(err as any).error?.message ?? (err as any).errors?.[0]?.message ?? res.statusText}`);
+      throw await this.createApiError(res);
     }
 
     const data = await res.json() as ChatCompletionResponse;
@@ -94,8 +93,7 @@ export class CloudflareProvider extends BaseProvider {
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(`Cloudflare API error ${res.status}: ${(err as any).error?.message ?? (err as any).errors?.[0]?.message ?? res.statusText}`);
+      throw await this.createApiError(res);
     }
 
     const reader = res.body?.getReader();
