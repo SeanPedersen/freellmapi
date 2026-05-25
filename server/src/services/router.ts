@@ -45,6 +45,7 @@ const SPEED_WEIGHT = 0.3;
 const SMART_SPEED_FACTOR = 0.2;
 const SMART_TTFB_FACTOR = 0.2;
 const SMART_INTELLIGENCE_WEIGHT = 0.6;
+const AUTO_INTELLIGENCE_WEIGHT = 0.1;
 
 // Optimistic speed prior for models with no successful history yet.
 const SPEED_PRIOR = 1.0;
@@ -113,6 +114,13 @@ function speedContribution(tokPerSec: number, maxTokPerSec: number): number {
     ? SLOW_SPEED_PENALTY_WEIGHT * (1 - tokPerSec / MIN_USEFUL_TOK_S)
     : 0;
   return reward - penalty;
+}
+
+function intelligenceContribution(intelligenceRank: number, minIntelligenceRank: number, maxIntelligenceRank: number): number {
+  const intelligenceRange = maxIntelligenceRank - minIntelligenceRank;
+  return intelligenceRange <= 0
+    ? 1
+    : 1 - ((intelligenceRank - minIntelligenceRank) / intelligenceRange);
 }
 
 // ── Beta distribution sampler (Marsaglia & Tsang via two Gamma draws) ─────
@@ -193,7 +201,13 @@ export function refreshStatsCache(db: Database, force = false): void {
 }
 
 // Deterministic expected score — used by the dashboard to rank models for display.
-export function getAnalyticsScore(platform: string, modelId: string): number {
+export function getAnalyticsScore(
+  platform: string,
+  modelId: string,
+  intelligenceRank?: number,
+  minIntelligenceRank?: number,
+  maxIntelligenceRank?: number,
+): number {
   const stats = statsCache?.get(`${platform}:${modelId}`);
   const total = stats?.total ?? 0;
   const successes = stats?.successes ?? 0;
@@ -206,7 +220,14 @@ export function getAnalyticsScore(platform: string, modelId: string): number {
   const ttfbScore = (stats && stats.avgTtfbMs !== null)
     ? ttfbContribution(stats.avgTtfbMs)
     : 0;
-  return bayesRate + speed + ttfbScore;
+  const intelligenceScore = (
+    intelligenceRank !== undefined &&
+    minIntelligenceRank !== undefined &&
+    maxIntelligenceRank !== undefined
+  )
+    ? AUTO_INTELLIGENCE_WEIGHT * intelligenceContribution(intelligenceRank, minIntelligenceRank, maxIntelligenceRank)
+    : 0;
+  return bayesRate + speed + ttfbScore + intelligenceScore;
 }
 
 export function getSmartAnalyticsScore(
@@ -226,16 +247,19 @@ export function getSmartAnalyticsScore(
   const ttfbScore = (stats && stats.avgTtfbMs !== null)
     ? ttfbContribution(stats.avgTtfbMs) * SMART_TTFB_FACTOR
     : 0;
-  const intelligenceRange = maxIntelligenceRank - minIntelligenceRank;
-  const intelligenceScore = intelligenceRange <= 0
-    ? 1
-    : 1 - ((intelligenceRank - minIntelligenceRank) / intelligenceRange);
+  const intelligenceScore = intelligenceContribution(intelligenceRank, minIntelligenceRank, maxIntelligenceRank);
   return bayesRate + SMART_INTELLIGENCE_WEIGHT * intelligenceScore + speed + ttfbScore;
 }
 
 // Stochastic score used for routing — samples from the Beta posterior so that
 // models are chosen probabilistically rather than always picking the single best.
-function thompsonSampleScore(platform: string, modelId: string): number {
+function thompsonSampleScore(
+  platform: string,
+  modelId: string,
+  intelligenceRank?: number,
+  minIntelligenceRank?: number,
+  maxIntelligenceRank?: number,
+): number {
   const stats = statsCache?.get(`${platform}:${modelId}`);
   const alpha = (stats?.successes ?? 0) + PRIOR_SUCCESS;
   const beta  = ((stats?.total ?? 0) - (stats?.successes ?? 0)) + PRIOR_FAILURE;
@@ -248,7 +272,14 @@ function thompsonSampleScore(platform: string, modelId: string): number {
   const ttfbScore = stats === undefined
     ? TTFB_WEIGHT * TTFB_PRIOR
     : ttfbContribution(stats.avgTtfbMs);
-  return sampleBeta(alpha, beta) + speed + ttfbScore;
+  const intelligenceScore = (
+    intelligenceRank !== undefined &&
+    minIntelligenceRank !== undefined &&
+    maxIntelligenceRank !== undefined
+  )
+    ? AUTO_INTELLIGENCE_WEIGHT * intelligenceContribution(intelligenceRank, minIntelligenceRank, maxIntelligenceRank)
+    : 0;
+  return sampleBeta(alpha, beta) + speed + ttfbScore + intelligenceScore;
 }
 
 function smartSampleScore(entry: ChainRow, minIntelligenceRank: number, maxIntelligenceRank: number): number {
@@ -282,6 +313,18 @@ export function getAnalyticsScores(): Array<{
   avgTtfbMs: number | null;
 }> {
   if (!statsCache) return [];
+  const db = getDb();
+  const intelligenceRows = db.prepare(`
+    SELECT platform, model_id, intelligence_rank
+    FROM models
+    WHERE enabled = 1
+  `).all() as Array<{ platform: string; model_id: string; intelligence_rank: number }>;
+  const intelligenceMap = new Map(
+    intelligenceRows.map(row => [`${row.platform}:${row.model_id}`, row.intelligence_rank] as const),
+  );
+  const intelligenceRanks = intelligenceRows.map(row => row.intelligence_rank);
+  const minIntelligenceRank = intelligenceRanks.length > 0 ? Math.min(...intelligenceRanks) : 0;
+  const maxIntelligenceRank = intelligenceRanks.length > 0 ? Math.max(...intelligenceRanks) : 0;
   const result: Array<{
     platform: string;
     modelId: string;
@@ -294,10 +337,11 @@ export function getAnalyticsScores(): Array<{
   for (const [key, stats] of statsCache) {
     const [platform, ...rest] = key.split(':');
     const modelId = rest.join(':');
+    const intelligenceRank = intelligenceMap.get(`${platform}:${modelId}`);
     result.push({
       platform,
       modelId,
-      score: getAnalyticsScore(platform, modelId),
+      score: getAnalyticsScore(platform, modelId, intelligenceRank, minIntelligenceRank, maxIntelligenceRank),
       successRate: stats.total > 0 ? stats.successes / stats.total : 0,
       total: stats.total,
       tokPerSec: stats.tokPerSec,
@@ -438,7 +482,13 @@ export function routeRequest(
     effectiveScore:
       (routingMode === 'smart'
         ? smartSampleScore(entry, minIntelligenceRank, maxIntelligenceRank)
-        : thompsonSampleScore(entry.platform, entry.model_id))
+        : thompsonSampleScore(
+            entry.platform,
+            entry.model_id,
+            entry.intelligence_rank,
+            minIntelligenceRank,
+            maxIntelligenceRank,
+          ))
       - getPenalty(entry.model_db_id) * PENALTY_SCORE_WEIGHT,
   })).sort((a, b) => b.effectiveScore - a.effectiveScore);
 

@@ -37,7 +37,13 @@ fallbackRouter.get('/', (_req: Request, res: Response) => {
   const result = rows.map(r => {
     const penalty = penaltyMap.get(r.model_db_id);
     const analytics = analyticsMap.get(`${r.platform}:${r.model_id}`);
-    const score = getAnalyticsScore(r.platform, r.model_id);
+    const score = analytics?.score ?? getAnalyticsScore(
+      r.platform,
+      r.model_id,
+      r.intelligence_rank,
+      minIntelligenceRank,
+      maxIntelligenceRank,
+    );
     const smartScore = getSmartAnalyticsScore(
       r.platform,
       r.model_id,
