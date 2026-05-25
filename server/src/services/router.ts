@@ -44,7 +44,7 @@ const PRIOR_FAILURE = 2;
 const SPEED_WEIGHT = 0.3;
 const SMART_SPEED_FACTOR = 0.2;
 const SMART_TTFB_FACTOR = 0.2;
-const SMART_INTELLIGENCE_WEIGHT = 0.35;
+const SMART_INTELLIGENCE_WEIGHT = 0.6;
 
 // Optimistic speed prior for models with no successful history yet.
 const SPEED_PRIOR = 1.0;
