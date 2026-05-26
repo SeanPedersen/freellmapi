@@ -371,7 +371,7 @@ function isAuthError(err: any): boolean {
 function isRetryableError(err: any): boolean {
   const status = getErrorStatus(err);
   if (status === 401 || status === 403) return true;
-  if (status === 429 || status === 400 || status === 404 || status === 408 || status === 409
+  if (status === 413 || status === 429 || status === 400 || status === 404 || status === 408 || status === 409
     || status === 422 || status === 500 || status === 502 || status === 503 || status === 504) {
     return true;
   }
