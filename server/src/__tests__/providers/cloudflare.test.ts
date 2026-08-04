@@ -54,6 +54,38 @@ describe('CloudflareProvider', () => {
     ).rejects.toThrow(/account_id:api_token/);
   });
 
+  it('should send a max_tokens ceiling so CF does not silently cap at 256', async () => {
+    const captured: any[] = [];
+    vi.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+      captured.push(JSON.parse((init as any).body));
+      return {
+        ok: true,
+        body: { getReader: () => ({ read: async () => ({ done: true, value: undefined }) }) },
+        json: () => Promise.resolve({
+          id: 'chatcmpl-cf',
+          object: 'chat.completion',
+          created: 123,
+          model: '@cf/openai/gpt-oss-120b',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      } as any;
+    });
+
+    const messages = [{ role: 'user' as const, content: 'Summarize this transcript.' }];
+    await provider.chatCompletion('abc123:token', messages, '@cf/openai/gpt-oss-120b');
+    for await (const _ of provider.streamChatCompletion('abc123:token', messages, '@cf/openai/gpt-oss-120b')) { /* drain */ }
+
+    expect(captured).toHaveLength(2);
+    for (const body of captured) {
+      expect(body.max_tokens).toBeGreaterThan(256);
+    }
+
+    // An explicit client value still wins.
+    await provider.chatCompletion('abc123:token', messages, '@cf/openai/gpt-oss-120b', { max_tokens: 64 });
+    expect(captured[2].max_tokens).toBe(64);
+  });
+
   it('should convert null assistant content to empty string (CF rejects null)', async () => {
     let capturedBody: any = null;
     vi.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {

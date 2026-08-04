@@ -17,6 +17,12 @@ export interface CompletionOptions {
   parallel_tool_calls?: boolean;
 }
 
+// Bounds a whole non-streaming generation (for streams it only bounds time to
+// response headers). A full-length completion routinely runs 20-30s, so this
+// must stay well clear of that — a tighter bound aborts good responses rather
+// than failing over usefully. `validateKey` passes its own shorter timeout.
+const COMPLETION_TIMEOUT_MS = 60000;
+
 export interface ProviderApiError extends Error {
   status?: number;
   provider?: string;
@@ -69,7 +75,7 @@ export abstract class BaseProvider {
   protected async fetchWithTimeout(
     url: string,
     init: RequestInit,
-    timeoutMs = 15000,
+    timeoutMs = COMPLETION_TIMEOUT_MS,
   ): Promise<Response> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);

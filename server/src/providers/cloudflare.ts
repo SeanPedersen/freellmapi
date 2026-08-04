@@ -5,6 +5,12 @@ import type {
 } from '@freellmapi/shared/types.js';
 import { BaseProvider, type CompletionOptions } from './base.js';
 
+// Unlike every other provider, Cloudflare caps generation at 256 tokens when
+// `max_tokens` is omitted, silently returning finish_reason='length' mid-sentence.
+// Send an explicit ceiling instead; Cloudflare clamps it down to the model's own
+// limit, so overshooting is safe.
+const DEFAULT_MAX_TOKENS = 16384;
+
 /**
  * Cloudflare Workers AI provider.
  * API key format expected: "account_id:api_token"
@@ -47,7 +53,7 @@ export class CloudflareProvider extends BaseProvider {
         model: modelId,
         messages: this.normalizeMessages(messages),
         temperature: options?.temperature,
-        max_tokens: options?.max_tokens,
+        max_tokens: options?.max_tokens ?? DEFAULT_MAX_TOKENS,
         top_p: options?.top_p,
         tools: options?.tools,
         tool_choice: options?.tool_choice,
@@ -83,7 +89,7 @@ export class CloudflareProvider extends BaseProvider {
         model: modelId,
         messages: this.normalizeMessages(messages),
         temperature: options?.temperature,
-        max_tokens: options?.max_tokens,
+        max_tokens: options?.max_tokens ?? DEFAULT_MAX_TOKENS,
         top_p: options?.top_p,
         tools: options?.tools,
         tool_choice: options?.tool_choice,
