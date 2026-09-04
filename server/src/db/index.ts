@@ -27,6 +27,7 @@ export function initDb(dbPath?: string): Database.Database {
   if (resolvedPath !== ':memory:') db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   createTables(db);
+  migrateIntelligenceScores(db);
   disableLegacyCatalog(db);
   invalidateChangedModelDiscovery(db);
   migrateRequestMetrics(db);
@@ -100,10 +101,23 @@ function createTables(db: Database.Database): void {
       last_succeeded_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS modelgrep_scores (
+      model_id TEXT PRIMARY KEY,
+      intelligence_score REAL NOT NULL CHECK(intelligence_score >= 0 AND intelligence_score <= 100)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_requests_created_at ON requests(created_at);
     CREATE INDEX IF NOT EXISTS idx_requests_platform ON requests(platform);
     CREATE INDEX IF NOT EXISTS idx_api_keys_platform ON api_keys(platform);
   `);
+}
+
+/** Adds AA-backed scores without rewriting legacy installations' model catalog. */
+function migrateIntelligenceScores(db: Database.Database): void {
+  const columns = db.prepare('PRAGMA table_info(models)').all() as Array<{ name: string }>;
+  if (!columns.some(column => column.name === 'intelligence_score')) {
+    db.prepare('ALTER TABLE models ADD COLUMN intelligence_score REAL').run();
+  }
 }
 
 function migrateRequestMetrics(db: Database.Database): void {

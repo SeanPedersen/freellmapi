@@ -12,7 +12,7 @@ modelsRouter.get('/', (_req: Request, res: Response) => {
     SELECT m.*, fc.priority, fc.enabled as fallback_enabled
     FROM models m
     LEFT JOIN fallback_config fc ON fc.model_db_id = m.id
-    ORDER BY COALESCE(fc.priority, m.intelligence_rank) ASC
+    ORDER BY COALESCE(fc.priority, 2147483647) ASC, m.intelligence_score DESC, m.display_name ASC
   `).all() as any[];
 
   // Count keys per platform
@@ -30,7 +30,7 @@ modelsRouter.get('/', (_req: Request, res: Response) => {
     platform: m.platform,
     modelId: m.model_id,
     displayName: m.display_name,
-    intelligenceRank: m.intelligence_rank,
+    intelligenceScore: m.intelligence_score,
     speedRank: m.speed_rank,
     sizeLabel: m.size_label,
     rpmLimit: m.rpm_limit,

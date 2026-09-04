@@ -4,12 +4,14 @@ import { initDb } from './db/index.js';
 import { assertAdminAuthConfigured } from './middleware/adminAuth.js';
 import { startHealthChecker } from './services/health.js';
 import { startModelDiscovery } from './services/modelDiscovery.js';
+import { startIntelligenceScoreSync } from './services/intelligenceScores.js';
 
 const PORT = process.env.PORT ?? 3001;
 
 async function main() {
   assertAdminAuthConfigured();
   initDb();
+  await startIntelligenceScoreSync();
   const app = createApp();
 
   const server = app.listen(Number(PORT), '0.0.0.0', () => {

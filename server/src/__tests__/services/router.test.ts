@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { initDb, getDb } from '../../db/index.js';
 import { encrypt } from '../../lib/crypto.js';
-import { routeRequest } from '../../services/router.js';
+import { getSmartAnalyticsScore, routeRequest } from '../../services/router.js';
 
 describe('Router', () => {
   beforeAll(() => {
@@ -98,5 +98,34 @@ describe('Router', () => {
 
     const result = routeRequest();
     expect(result.platform).toBe('groq');
+  });
+
+  it('auto-smart considers only models with a verified intelligence score', () => {
+    const db = getDb();
+    db.prepare("UPDATE models SET intelligence_score = NULL").run();
+    db.prepare("UPDATE models SET intelligence_score = 84 WHERE platform = 'groq' AND model_id = 'test-model'").run();
+    const key = encrypt('smart-key');
+    db.prepare(`INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
+      VALUES ('groq', 'smart', ?, ?, ?, 'healthy', 1)`)
+      .run(key.encrypted, key.iv, key.authTag);
+
+    expect(routeRequest(1000, undefined, undefined, 'smart').modelId).toBe('test-model');
+  });
+
+  it('balanced routing still admits an unscored model', () => {
+    const db = getDb();
+    db.prepare("UPDATE models SET intelligence_score = NULL").run();
+    const key = encrypt('balanced-key');
+    db.prepare(`INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
+      VALUES ('groq', 'balanced', ?, ?, ?, 'healthy', 1)`)
+      .run(key.encrypted, key.iv, key.authTag);
+
+    expect(routeRequest().modelId).toBe('test-model');
+  });
+
+  it('gives a higher absolute AA score a higher smart score under equal metrics', () => {
+    expect(getSmartAnalyticsScore('none', 'high', 90)).toBeGreaterThan(
+      getSmartAnalyticsScore('none', 'low', 40),
+    );
   });
 });

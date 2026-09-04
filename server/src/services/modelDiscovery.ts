@@ -4,9 +4,9 @@ import { getDb } from '../db/index.js';
 import { decrypt } from '../lib/crypto.js';
 import { getAllProviders, getProvider } from '../providers/index.js';
 import type { DiscoveredModel } from '../providers/base.js';
+import { getCachedIntelligenceScore } from './intelligenceScores.js';
 
 const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const DISCOVERED_INTELLIGENCE_RANK = 100;
 const DISCOVERED_SPEED_RANK = 100;
 
 type KeyRow = {
@@ -39,10 +39,11 @@ function saveDiscoveredModels(platform: Platform, models: DiscoveredModel[]): vo
   const existing = db.prepare('SELECT id, model_id FROM models WHERE platform = ?').all(platform) as Array<{ id: number; model_id: string }>;
   const discoveredIds = new Set(uniqueModels.map(model => model.id));
   const insertModel = db.prepare(`
-    INSERT INTO models (platform, model_id, display_name, intelligence_rank, speed_rank, context_window, enabled)
-    VALUES (?, ?, ?, ?, ?, ?, 1)
+    INSERT INTO models (platform, model_id, display_name, intelligence_rank, intelligence_score, speed_rank, context_window, enabled)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1)
     ON CONFLICT(platform, model_id) DO UPDATE SET
       display_name = excluded.display_name,
+      intelligence_score = excluded.intelligence_score,
       context_window = COALESCE(excluded.context_window, models.context_window),
       enabled = 1
   `);
@@ -66,7 +67,8 @@ function saveDiscoveredModels(platform: Platform, models: DiscoveredModel[]): vo
         platform,
         model.id,
         modelDisplayName(model),
-        DISCOVERED_INTELLIGENCE_RANK,
+        100,
+        getCachedIntelligenceScore(platform, model.id),
         DISCOVERED_SPEED_RANK,
         model.contextWindow ?? null,
       );

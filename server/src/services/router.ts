@@ -10,7 +10,7 @@ interface ChainRow {
   platform: string;
   model_id: string;
   display_name: string;
-  intelligence_rank: number;
+  intelligence_score: number | null;
   rpm_limit: number | null;
   rpd_limit: number | null;
   tpm_limit: number | null;
@@ -116,11 +116,8 @@ function speedContribution(tokPerSec: number, maxTokPerSec: number): number {
   return reward - penalty;
 }
 
-function intelligenceContribution(intelligenceRank: number, minIntelligenceRank: number, maxIntelligenceRank: number): number {
-  const intelligenceRange = maxIntelligenceRank - minIntelligenceRank;
-  return intelligenceRange <= 0
-    ? 1
-    : 1 - ((intelligenceRank - minIntelligenceRank) / intelligenceRange);
+function intelligenceContribution(intelligenceScore: number | null | undefined): number {
+  return intelligenceScore === null || intelligenceScore === undefined ? 0 : intelligenceScore / 100;
 }
 
 // ── Beta distribution sampler (Marsaglia & Tsang via two Gamma draws) ─────
@@ -204,9 +201,7 @@ export function refreshStatsCache(db: Database, force = false): void {
 export function getAnalyticsScore(
   platform: string,
   modelId: string,
-  intelligenceRank?: number,
-  minIntelligenceRank?: number,
-  maxIntelligenceRank?: number,
+  intelligenceScore?: number | null,
 ): number {
   const stats = statsCache?.get(`${platform}:${modelId}`);
   const total = stats?.total ?? 0;
@@ -220,22 +215,14 @@ export function getAnalyticsScore(
   const ttfbScore = (stats && stats.avgTtfbMs !== null)
     ? ttfbContribution(stats.avgTtfbMs)
     : 0;
-  const intelligenceScore = (
-    intelligenceRank !== undefined &&
-    minIntelligenceRank !== undefined &&
-    maxIntelligenceRank !== undefined
-  )
-    ? AUTO_INTELLIGENCE_WEIGHT * intelligenceContribution(intelligenceRank, minIntelligenceRank, maxIntelligenceRank)
-    : 0;
-  return bayesRate + speed + ttfbScore + intelligenceScore;
+  const intelligence = AUTO_INTELLIGENCE_WEIGHT * intelligenceContribution(intelligenceScore);
+  return bayesRate + speed + ttfbScore + intelligence;
 }
 
 export function getSmartAnalyticsScore(
   platform: string,
   modelId: string,
-  intelligenceRank: number,
-  minIntelligenceRank: number,
-  maxIntelligenceRank: number,
+  intelligenceScore: number | null,
 ): number {
   const stats = statsCache?.get(`${platform}:${modelId}`);
   const total = stats?.total ?? 0;
@@ -247,8 +234,8 @@ export function getSmartAnalyticsScore(
   const ttfbScore = (stats && stats.avgTtfbMs !== null)
     ? ttfbContribution(stats.avgTtfbMs) * SMART_TTFB_FACTOR
     : 0;
-  const intelligenceScore = intelligenceContribution(intelligenceRank, minIntelligenceRank, maxIntelligenceRank);
-  return bayesRate + SMART_INTELLIGENCE_WEIGHT * intelligenceScore + speed + ttfbScore;
+  const intelligence = intelligenceContribution(intelligenceScore);
+  return bayesRate + SMART_INTELLIGENCE_WEIGHT * intelligence + speed + ttfbScore;
 }
 
 // Stochastic score used for routing — samples from the Beta posterior so that
@@ -256,9 +243,7 @@ export function getSmartAnalyticsScore(
 function thompsonSampleScore(
   platform: string,
   modelId: string,
-  intelligenceRank?: number,
-  minIntelligenceRank?: number,
-  maxIntelligenceRank?: number,
+  intelligenceScore?: number | null,
 ): number {
   const stats = statsCache?.get(`${platform}:${modelId}`);
   const alpha = (stats?.successes ?? 0) + PRIOR_SUCCESS;
@@ -272,17 +257,11 @@ function thompsonSampleScore(
   const ttfbScore = stats === undefined
     ? TTFB_WEIGHT * TTFB_PRIOR
     : ttfbContribution(stats.avgTtfbMs);
-  const intelligenceScore = (
-    intelligenceRank !== undefined &&
-    minIntelligenceRank !== undefined &&
-    maxIntelligenceRank !== undefined
-  )
-    ? AUTO_INTELLIGENCE_WEIGHT * intelligenceContribution(intelligenceRank, minIntelligenceRank, maxIntelligenceRank)
-    : 0;
-  return sampleBeta(alpha, beta) + speed + ttfbScore + intelligenceScore;
+  const intelligence = AUTO_INTELLIGENCE_WEIGHT * intelligenceContribution(intelligenceScore);
+  return sampleBeta(alpha, beta) + speed + ttfbScore + intelligence;
 }
 
-function smartSampleScore(entry: ChainRow, minIntelligenceRank: number, maxIntelligenceRank: number): number {
+function smartSampleScore(entry: ChainRow): number {
   const stats = statsCache?.get(`${entry.platform}:${entry.model_id}`);
   const alpha = (stats?.successes ?? 0) + PRIOR_SUCCESS;
   const beta  = ((stats?.total ?? 0) - (stats?.successes ?? 0)) + PRIOR_FAILURE;
@@ -292,11 +271,7 @@ function smartSampleScore(entry: ChainRow, minIntelligenceRank: number, maxIntel
   const ttfbScore = stats === undefined
     ? TTFB_WEIGHT * TTFB_PRIOR * SMART_TTFB_FACTOR
     : ttfbContribution(stats.avgTtfbMs) * SMART_TTFB_FACTOR;
-  const intelligenceRange = maxIntelligenceRank - minIntelligenceRank;
-  const intelligenceScore = intelligenceRange <= 0
-    ? 1
-    : 1 - ((entry.intelligence_rank - minIntelligenceRank) / intelligenceRange);
-  return sampleBeta(alpha, beta) + SMART_INTELLIGENCE_WEIGHT * intelligenceScore + speed + ttfbScore;
+  return sampleBeta(alpha, beta) + SMART_INTELLIGENCE_WEIGHT * intelligenceContribution(entry.intelligence_score) + speed + ttfbScore;
 }
 
 /**
@@ -315,16 +290,13 @@ export function getAnalyticsScores(): Array<{
   if (!statsCache) return [];
   const db = getDb();
   const intelligenceRows = db.prepare(`
-    SELECT platform, model_id, intelligence_rank
+    SELECT platform, model_id, intelligence_score
     FROM models
     WHERE enabled = 1
-  `).all() as Array<{ platform: string; model_id: string; intelligence_rank: number }>;
+  `).all() as Array<{ platform: string; model_id: string; intelligence_score: number | null }>;
   const intelligenceMap = new Map(
-    intelligenceRows.map(row => [`${row.platform}:${row.model_id}`, row.intelligence_rank] as const),
+    intelligenceRows.map(row => [`${row.platform}:${row.model_id}`, row.intelligence_score] as const),
   );
-  const intelligenceRanks = intelligenceRows.map(row => row.intelligence_rank);
-  const minIntelligenceRank = intelligenceRanks.length > 0 ? Math.min(...intelligenceRanks) : 0;
-  const maxIntelligenceRank = intelligenceRanks.length > 0 ? Math.max(...intelligenceRanks) : 0;
   const result: Array<{
     platform: string;
     modelId: string;
@@ -337,11 +309,11 @@ export function getAnalyticsScores(): Array<{
   for (const [key, stats] of statsCache) {
     const [platform, ...rest] = key.split(':');
     const modelId = rest.join(':');
-    const intelligenceRank = intelligenceMap.get(`${platform}:${modelId}`);
+    const intelligenceScore = intelligenceMap.get(`${platform}:${modelId}`);
     result.push({
       platform,
       modelId,
-      score: getAnalyticsScore(platform, modelId, intelligenceRank, minIntelligenceRank, maxIntelligenceRank),
+      score: getAnalyticsScore(platform, modelId, intelligenceScore),
       successRate: stats.total > 0 ? stats.successes / stats.total : 0,
       total: stats.total,
       tokPerSec: stats.tokPerSec,
@@ -468,27 +440,25 @@ export function routeRequest(
 
   const chain = db.prepare(`
     SELECT fc.model_db_id,
-           m.platform, m.model_id, m.display_name, m.intelligence_rank,
+           m.platform, m.model_id, m.display_name, m.intelligence_score,
            m.rpm_limit, m.rpd_limit, m.tpm_limit, m.tpd_limit
     FROM fallback_config fc
     JOIN models m ON m.id = fc.model_db_id AND m.enabled = 1
     WHERE fc.enabled = 1
   `).all() as ChainRow[];
 
-  const intelligenceRanks = chain.map(entry => entry.intelligence_rank);
-  const minIntelligenceRank = Math.min(...intelligenceRanks);
-  const maxIntelligenceRank = Math.max(...intelligenceRanks);
-  const sorted = chain.map(entry => ({
+  const eligibleChain = routingMode === 'smart'
+    ? chain.filter(entry => entry.intelligence_score !== null)
+    : chain;
+  const sorted = eligibleChain.map(entry => ({
     ...entry,
     effectiveScore:
       (routingMode === 'smart'
-        ? smartSampleScore(entry, minIntelligenceRank, maxIntelligenceRank)
+        ? smartSampleScore(entry)
         : thompsonSampleScore(
             entry.platform,
             entry.model_id,
-            entry.intelligence_rank,
-            minIntelligenceRank,
-            maxIntelligenceRank,
+            entry.intelligence_score,
           ))
       - getPenalty(entry.model_db_id) * PENALTY_SCORE_WEIGHT,
   })).sort((a, b) => b.effectiveScore - a.effectiveScore);

@@ -27,7 +27,7 @@ export interface Model {
   platform: Platform;
   modelId: string;
   displayName: string;
-  intelligenceRank: number;
+  intelligenceScore: number | null;
   speedRank: number;
   sizeLabel: string;
   rpmLimit: number | null;
@@ -64,7 +64,7 @@ export interface FallbackEntry {
   modelId: number;
   platform: Platform;
   displayName: string;
-  intelligenceRank: number;
+  intelligenceScore: number | null;
   speedRank: number;
   priority: number;
   enabled: boolean;

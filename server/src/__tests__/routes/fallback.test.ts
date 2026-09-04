@@ -27,11 +27,11 @@ describe('Fallback API', () => {
     initDb(':memory:');
     const db = getDb();
     const insert = db.prepare(`
-      INSERT INTO models (platform, model_id, display_name, intelligence_rank, speed_rank)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO models (platform, model_id, display_name, intelligence_rank, intelligence_score, speed_rank)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
-    insert.run('groq', 'test-fast', 'Test Fast', 100, 1);
-    insert.run('groq', 'test-smart', 'Test Smart', 1, 100);
+    insert.run('groq', 'test-fast', 'Test Fast', 100, 42.5, 1);
+    insert.run('groq', 'test-smart', 'Test Smart', 1, 88.2, 100);
     const models = db.prepare('SELECT id FROM models ORDER BY id').all() as Array<{ id: number }>;
     const fallback = db.prepare('INSERT INTO fallback_config (model_db_id, priority) VALUES (?, ?)');
     models.forEach((model, index) => fallback.run(model.id, index + 1));
@@ -57,7 +57,7 @@ describe('Fallback API', () => {
     expect(first).toHaveProperty('enabled');
     expect(first).toHaveProperty('platform');
     expect(first).toHaveProperty('displayName');
-    expect(first).toHaveProperty('intelligenceRank');
+    expect(first).toHaveProperty('intelligenceScore');
   });
 
   it('PUT /api/fallback updates order', async () => {
@@ -91,9 +91,9 @@ describe('Fallback API', () => {
     expect(status).toBe(200);
 
     const { body } = await request(app, 'GET', '/api/fallback');
-    // Should be sorted ascending by intelligence rank
+    // Higher AA intelligence scores sort first.
     for (let i = 1; i < body.length; i++) {
-      expect(body[i].intelligenceRank).toBeGreaterThanOrEqual(body[i - 1].intelligenceRank);
+      expect(body[i].intelligenceScore).toBeLessThanOrEqual(body[i - 1].intelligenceScore);
     }
   });
 

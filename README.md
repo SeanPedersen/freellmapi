@@ -66,7 +66,8 @@ The problem is that stacking them by hand is painful: fourteen different SDKs, f
 - **Streaming and non-streaming** — Server-Sent Events for `stream: true`, JSON response otherwise. Every provider adapter implements both.
 - **Tool calling** — OpenAI-style `tools` / `tool_choice` requests are passed through, and assistant `tool_calls` + `tool` role follow-up messages round-trip across providers.
 - **Thompson-sampling router** — Each request draws a score from each model's Beta posterior (`Beta(successes + 2, failures + 2)`), adds a normalized tok/s speed term, and subtracts any active rate-limit penalty. The stochastic draw means better models win more often without locking out unproven ones — exploration is automatic and proportional to uncertainty. The dashboard shows the deterministic Bayesian mean of the same posterior for human readability. Rate-limit penalties are model-scoped but only applied once all keys for that model are exhausted — a single key hitting a 429 does not down-rank the model if other keys remain available.
-- **Two routing modes** — `freellmapi/auto` (default) balances speed, reliability, and intelligence. `freellmapi/auto-smart` prioritizes model capability (60% intelligence weight) over raw speed — better for complex reasoning tasks where you want the smartest available model even if it streams more slowly.
+- **Two routing modes** — `freellmapi/auto` (default) balances speed, reliability, and intelligence. `freellmapi/auto-smart` prioritizes model capability (60% AA Intelligence weight) over raw speed, and routes only to models with a verified score — better for complex reasoning tasks.
+- **AA Intelligence scores** — Scores come from [ModelGrep’s no-key catalog](https://modelgrep.com/api), sourced from [Artificial Analysis](https://artificialanalysis.ai/methodology/intelligence-benchmarking). The server refreshes its verified cache daily; unavailable or invalid source data leaves the last verified cache in place.
 - **Automatic fallover** — If the chosen provider returns a 429, 5xx, or times out, the router skips it, puts the key on a short cooldown, and retries on the next model in your fallback chain (up to 20 attempts).
 - **Per-key rate tracking** — RPM, RPD, TPM, and TPD counters per `(platform, model, key)` so the router always picks a key that's under its caps.
 - **Sticky sessions** — Multi-turn conversations keep talking to the same model for 30 minutes to avoid the hallucination spike that comes from mid-conversation model switches.
@@ -162,7 +163,7 @@ print("Routed via:", resp.headers.get("x-routed-via"))
 # Balanced (default): Optimizes for speed, reliability, and basic capability
 client.chat.completions.create(model="freellmapi/auto", ...)
 
-# Smart: Prioritizes intelligence (60% weight) — better for reasoning, coding, analysis
+# Smart: Prioritizes verified AA Intelligence (60% weight) — scored models only
 # May trade speed for capability, preferring models like Gemini 2.5 Pro or GPT-4o
 client.chat.completions.create(model="freellmapi/auto-smart", ...)
 ```
@@ -268,7 +269,7 @@ Request volume, success rate, tokens in and out, average latency, and per-provid
                              │  Router (Thompson-sampling bandit)                   │
                              │   1. For each enabled model, sample a score:         │
                              │        score = Beta(wins+2, losses+2) sample         │
-                             │              + INTELLIGENCE_WEIGHT × normalized rank │
+                             │              + INTELLIGENCE_WEIGHT × (AA score / 100)│
                              │              + SPEED_WEIGHT × (tok/s / max tok/s)    │
                              │              + TTFB_WEIGHT × ttfb_score              │
                              │              - slow-model penalty (if < 10 tok/s)    │
@@ -287,7 +288,7 @@ Request volume, success rate, tokens in and out, average latency, and per-provid
  Google         Groq        Cerebras           OpenRouter        HF       …10 more
 ```
 
-- **Router** (`server/src/services/router.ts`) — Thompson-sampling multi-armed bandit. Samples from each model's Beta posterior over success rate, adds a normalized tok/s speed reward (models below 10 tok/s receive an active penalty), and subtracts a time-decaying rate-limit penalty for recent 429s. The bandit penalty is model-scoped and fires only when all keys for a model are exhausted by 429s in the current retry loop — a single key rate-limiting does not demote the model if other keys remain. Stochastic selection means the router naturally explores new models while converging on faster, more reliable ones as data accumulates.
+- **Router** (`server/src/services/router.ts`) — Thompson-sampling multi-armed bandit. Samples from each model's Beta posterior over success rate, adds a normalized tok/s speed reward (models below 10 tok/s receive an active penalty), AA Intelligence/100 when available, and subtracts a time-decaying rate-limit penalty for recent 429s. Auto Smart excludes unscored models; balanced routing still admits them. The bandit penalty is model-scoped and fires only when all keys for a model are exhausted by 429s in the current retry loop.
 - **Rate-limit ledger** (`server/src/services/ratelimit.ts`) — in-memory RPM/RPD/TPM/TPD counters backed by SQLite, with cooldowns on 429s.
 - **Provider adapters** (`server/src/providers/*.ts`) — one file per provider, implementing the `Provider` base class: `chatCompletion()` and `streamChatCompletion()`.
 - **Health service** (`server/src/services/health.ts`) — periodic probe keeps key status fresh.
@@ -299,7 +300,7 @@ Request volume, success rate, tokens in and out, average latency, and per-provid
 Stacking free tiers has real trade-offs. Be honest with yourself about them:
 
 - **No frontier models.** The free-tier catalog tops out around Llama 3.3 70B, GLM-4.5, Qwen 3 Coder, and Gemini 2.5 Pro. You will not get GPT-5 or Claude Opus class reasoning through this. For hard problems, pay for a real API.
-- **Intelligence degrades as the day progresses.** Your top-ranked models (usually Gemini 2.5 Pro, GPT-4o via GitHub Models) have the lowest daily caps. Once they hit their limits, the router falls down your priority chain to smaller/weaker models. Expect the effective intelligence of the endpoint to drop in the late hours of each day — then reset at UTC midnight.
+- **Intelligence degrades as the day progresses.** Higher-scored models often have the lowest daily caps. Once they hit their limits, the router falls down your priority chain to smaller/weaker models. Expect the effective intelligence of the endpoint to drop in the late hours of each day — then reset at UTC midnight.
 - **Latency is highly variable.** Cerebras and Groq are extremely fast; others are not. You get whichever one is available.
 - **Free tiers can change without notice.** Providers regularly tighten, loosen, or remove free tiers. When that happens you'll see 429s or auth errors until you update the catalog. Re-seed scripts live in `server/src/scripts/`.
 - **No SLA, by definition.** If you need reliability, use a paid provider with a contract.

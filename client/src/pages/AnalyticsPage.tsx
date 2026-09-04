@@ -42,7 +42,7 @@ const axisStyle = { fontSize: 11, fill: 'var(--muted-foreground)' } as const
 const gridStyle = 'var(--border)'
 const primaryFill = 'var(--foreground)'
 
-type SortKey = 'displayName' | 'platform' | 'intelligenceRank' | 'requests' | 'successRate' | 'avgLatencyMs' | 'avgTtfbMs' | 'totalInputTokens' | 'totalOutputTokens' | 'outputTokensPerSec'
+type SortKey = 'displayName' | 'platform' | 'intelligenceScore' | 'requests' | 'successRate' | 'avgLatencyMs' | 'avgTtfbMs' | 'totalInputTokens' | 'totalOutputTokens' | 'outputTokensPerSec'
 type SortDir = 'asc' | 'desc'
 
 function sortModels(rows: any[], key: SortKey, dir: SortDir) {
@@ -218,7 +218,7 @@ export default function AnalyticsPage() {
                       <TableRow>
                         <SortableHead label="Model" sortKey="displayName" current={sortKey} dir={sortDir} onSort={handleSort} className="pl-4" />
                         <SortableHead label="Provider" sortKey="platform" current={sortKey} dir={sortDir} onSort={handleSort} />
-                        <SortableHead label="IQ rank" sortKey="intelligenceRank" current={sortKey} dir={sortDir} onSort={handleSort} className="text-right" />
+                        <SortableHead label="AA Intelligence" sortKey="intelligenceScore" current={sortKey} dir={sortDir} onSort={handleSort} className="text-right" />
                         <SortableHead label="Requests" sortKey="requests" current={sortKey} dir={sortDir} onSort={handleSort} className="text-right" />
                         <SortableHead label="Success" sortKey="successRate" current={sortKey} dir={sortDir} onSort={handleSort} className="text-right" />
                         <SortableHead label="Latency" sortKey="avgLatencyMs" current={sortKey} dir={sortDir} onSort={handleSort} className="text-right" />
@@ -233,7 +233,7 @@ export default function AnalyticsPage() {
                         <TableRow key={i}>
                           <TableCell className="pl-4 text-sm font-medium">{m.displayName}</TableCell>
                           <TableCell className="text-xs text-muted-foreground">{m.platform}</TableCell>
-                          <TableCell className="text-right tabular-nums text-muted-foreground">{m.intelligenceRank ?? '—'}</TableCell>
+                          <TableCell className="text-right tabular-nums text-muted-foreground">{m.intelligenceScore ?? '—'}</TableCell>
                           <TableCell className="text-right tabular-nums">{m.requests}</TableCell>
                           <TableCell className="text-right tabular-nums">{m.successRate}%</TableCell>
                           <TableCell className="text-right tabular-nums">{m.avgLatencyMs} ms</TableCell>

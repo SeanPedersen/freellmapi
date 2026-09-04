@@ -11,7 +11,7 @@ fallbackRouter.get('/', (_req: Request, res: Response) => {
   refreshStatsCache(db, true);
   const rows = db.prepare(`
     SELECT fc.model_db_id, fc.priority, fc.enabled,
-           m.platform, m.model_id, m.display_name, m.intelligence_rank, m.speed_rank,
+           m.platform, m.model_id, m.display_name, m.intelligence_score, m.speed_rank,
            m.rpm_limit, m.rpd_limit, m.monthly_token_budget
     FROM fallback_config fc
     JOIN models m ON m.id = fc.model_db_id AND m.enabled = 1
@@ -30,26 +30,18 @@ fallbackRouter.get('/', (_req: Request, res: Response) => {
   const analyticsScores = getAnalyticsScores();
   const analyticsMap = new Map(analyticsScores.map(s => [`${s.platform}:${s.modelId}`, s]));
 
-  const intelligenceRanks = rows.map(r => r.intelligence_rank);
-  const minIntelligenceRank = Math.min(...intelligenceRanks);
-  const maxIntelligenceRank = Math.max(...intelligenceRanks);
-
   const result = rows.map(r => {
     const penalty = penaltyMap.get(r.model_db_id);
     const analytics = analyticsMap.get(`${r.platform}:${r.model_id}`);
     const score = analytics?.score ?? getAnalyticsScore(
       r.platform,
       r.model_id,
-      r.intelligence_rank,
-      minIntelligenceRank,
-      maxIntelligenceRank,
+      r.intelligence_score,
     );
     const smartScore = getSmartAnalyticsScore(
       r.platform,
       r.model_id,
-      r.intelligence_rank,
-      minIntelligenceRank,
-      maxIntelligenceRank,
+      r.intelligence_score,
     );
     const penaltyVal = penalty?.penalty ?? 0;
     return {
@@ -68,7 +60,7 @@ fallbackRouter.get('/', (_req: Request, res: Response) => {
       platform: r.platform,
       modelId: r.model_id,
       displayName: r.display_name,
-      intelligenceRank: r.intelligence_rank,
+      intelligenceScore: r.intelligence_score,
       speedRank: r.speed_rank,
       rpmLimit: r.rpm_limit,
       rpdLimit: r.rpd_limit,
@@ -121,13 +113,13 @@ fallbackRouter.post('/sort/:criterion', (req: Request, res: Response) => {
     return;
   }
 
-  const orderColumn = parsed.data === 'intelligence' ? 'm.intelligence_rank' : 'm.speed_rank';
+  const orderColumn = parsed.data === 'intelligence' ? 'm.intelligence_score DESC' : 'm.speed_rank ASC';
   const db = getDb();
   const rows = db.prepare(`
     SELECT fc.model_db_id
       FROM fallback_config fc
       JOIN models m ON m.id = fc.model_db_id
-     ORDER BY ${orderColumn} ASC, m.intelligence_rank ASC, m.display_name ASC
+     ORDER BY ${orderColumn}, m.display_name ASC
   `).all() as { model_db_id: number }[];
 
   const update = db.prepare('UPDATE fallback_config SET priority = ? WHERE model_db_id = ?');

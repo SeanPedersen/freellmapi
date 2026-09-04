@@ -19,6 +19,7 @@ interface FallbackEntry {
   platform: string
   modelId: string
   displayName: string
+  intelligenceScore: number | null
   rpmLimit: number | null
   rpdLimit: number | null
   monthlyTokenBudget: string
@@ -38,11 +39,12 @@ interface TokenUsageData {
   models: { displayName: string; platform: string; budget: number }[]
 }
 
-type SortKey = 'model' | 'requests' | 'success' | 'tokPerSec' | 'ttfb' | 'auto' | 'smart'
+type SortKey = 'model' | 'intelligence' | 'requests' | 'success' | 'tokPerSec' | 'ttfb' | 'auto' | 'smart'
 type SortDir = 'asc' | 'desc'
 
 const sortLabels: Record<SortKey, string> = {
   model: 'Model',
+  intelligence: 'AA Intelligence',
   requests: 'Reqs',
   success: 'Success',
   tokPerSec: 'Tok/s',
@@ -53,6 +55,7 @@ const sortLabels: Record<SortKey, string> = {
 
 function sortValue(entry: FallbackEntry, key: SortKey): string | number {
   if (key === 'model') return entry.displayName.toLowerCase()
+  if (key === 'intelligence') return entry.intelligenceScore ?? -1
   if (key === 'requests') return entry.totalRequests
   if (key === 'success') return entry.successRate ?? -1
   if (key === 'tokPerSec') return entry.tokPerSec ?? -1
@@ -203,6 +206,10 @@ function ModelRow({
       </div>
 
       <div className="flex items-center gap-6 shrink-0">
+        <div className="text-right w-16">
+          <div className="text-sm font-mono tabular-nums text-muted-foreground">{entry.intelligenceScore ?? '—'}</div>
+          <div className="text-xs text-muted-foreground">AA intel.</div>
+        </div>
         <div className="text-right w-14">
           <div className="text-sm font-mono tabular-nums">
             {entry.totalRequests > 0 ? entry.totalRequests : <span className="text-muted-foreground">—</span>}
@@ -300,7 +307,7 @@ export default function FallbackPage() {
     <div>
       <PageHeader
         title="Bandit routing"
-        description="Models are ranked by success rate, TTFB, and tok/s over the last 7 days. Toggle to include or exclude from the routing chain."
+        description="Models are ranked by success rate, TTFB, tok/s, and AA Intelligence over the last 7 days. Toggle to include or exclude from the routing chain."
       />
 
       <div className="space-y-6">
@@ -330,6 +337,7 @@ export default function FallbackPage() {
                   className="flex-1 min-w-0 text-left"
                 />
                 <div className="flex items-center gap-6 shrink-0">
+                  <SortHeader label={sortLabels.intelligence} sortKey="intelligence" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-16 text-right" />
                   <SortHeader label={sortLabels.requests} sortKey="requests" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-14 text-right" />
                   <SortHeader label={sortLabels.success} sortKey="success" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-20 text-right" />
                   <SortHeader label={sortLabels.tokPerSec} sortKey="tokPerSec" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-16 text-right" />
@@ -356,6 +364,9 @@ export default function FallbackPage() {
                 Hidden (no keys): {unconfiguredPlatforms.join(', ')}
               </p>
             )}
+            <p className="text-xs text-muted-foreground">
+              AA Intelligence scores via <a className="underline" href="https://modelgrep.com/api" target="_blank" rel="noreferrer">ModelGrep</a>, sourced from <a className="underline" href="https://artificialanalysis.ai/methodology/intelligence-benchmarking" target="_blank" rel="noreferrer">Artificial Analysis</a>.
+            </p>
           </>
         )}
       </div>
