@@ -125,7 +125,7 @@ describe('Proxy tool-calling support', () => {
     expect(body.choices[0].message.tool_calls[0].function.name).toBe('get_weather');
   });
 
-  it('falls back to another model when the first auto-route returns 400', async () => {
+  it('falls back to another model when the first auto-route returns 402 payment required', async () => {
     const origFetch = global.fetch;
     let firstModel: string | null = null;
     const seenModels: string[] = [];
@@ -144,20 +144,20 @@ describe('Proxy tool-calling support', () => {
         firstModel = body.model;
         return {
           ok: false,
-          status: 400,
-          statusText: 'Bad Request',
-          json: () => Promise.resolve({ error: { message: 'unsupported field' } }),
-          text: () => Promise.resolve(JSON.stringify({ error: { message: 'unsupported field' } })),
+          status: 402,
+          statusText: 'Payment Required',
+          json: () => Promise.resolve({ error: { message: 'Payment required to access this resource' } }),
+          text: () => Promise.resolve(JSON.stringify({ error: { message: 'Payment required to access this resource' } })),
         } as any;
       }
 
       if (body.model === firstModel) {
         return {
           ok: false,
-          status: 400,
-          statusText: 'Bad Request',
-          json: () => Promise.resolve({ error: { message: 'unsupported field' } }),
-          text: () => Promise.resolve(JSON.stringify({ error: { message: 'unsupported field' } })),
+          status: 402,
+          statusText: 'Payment Required',
+          json: () => Promise.resolve({ error: { message: 'Payment required to access this resource' } }),
+          text: () => Promise.resolve(JSON.stringify({ error: { message: 'Payment required to access this resource' } })),
         } as any;
       }
 
