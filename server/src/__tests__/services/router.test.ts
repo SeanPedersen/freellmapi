@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { initDb, getDb } from '../../db/index.js';
 import { encrypt } from '../../lib/crypto.js';
-import { getSmartAnalyticsScore, routeRequest } from '../../services/router.js';
+import { getSmartAnalyticsScore, refreshStatsCache, routeRequest } from '../../services/router.js';
 
 describe('Router', () => {
   beforeAll(() => {
@@ -126,6 +126,18 @@ describe('Router', () => {
   it('gives a higher absolute AA score a higher smart score under equal metrics', () => {
     expect(getSmartAnalyticsScore('none', 'high', 90)).toBeGreaterThan(
       getSmartAnalyticsScore('none', 'low', 40),
+    );
+  });
+
+  it('makes AA Intelligence the dominant smart-routing signal', () => {
+    const db = getDb();
+    const insert = db.prepare(`INSERT INTO requests (platform, model_id, status, latency_ms) VALUES ('test', 'low', 'success', 1)`);
+    for (let index = 0; index < 50; index++) insert.run();
+    refreshStatsCache(db, true);
+
+    // A high score with a neutral prior outranks a low-score model with perfect history.
+    expect(getSmartAnalyticsScore('none', 'high', 52)).toBeGreaterThan(
+      getSmartAnalyticsScore('test', 'low', 15.2),
     );
   });
 });

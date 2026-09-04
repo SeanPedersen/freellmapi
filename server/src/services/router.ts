@@ -42,9 +42,11 @@ const PRIOR_FAILURE = 2;
 
 // Weight of the normalized speed signal added on top of the sampled success rate.
 const SPEED_WEIGHT = 0.3;
-const SMART_SPEED_FACTOR = 0.2;
-const SMART_TTFB_FACTOR = 0.2;
+const SMART_SUCCESS_WEIGHT = 0.25;
 const SMART_INTELLIGENCE_WEIGHT = 0.6;
+const SMART_SPEED_WEIGHT = 0.08;
+const SMART_TTFB_WEIGHT = 0.07;
+const SMART_SPEED_FACTOR = SMART_SPEED_WEIGHT / SPEED_WEIGHT;
 const AUTO_INTELLIGENCE_WEIGHT = 0.1;
 
 // Optimistic speed prior for models with no successful history yet.
@@ -72,6 +74,7 @@ export const PENALTY_SCORE_WEIGHT = 0.05;
 //   2000–10000 →  0.0  → -0.5   (bad, linear — full penalty at 10 s)
 //   > 10000 ms → -0.5  (capped)
 const TTFB_WEIGHT = 0.25;
+const SMART_TTFB_FACTOR = SMART_TTFB_WEIGHT / TTFB_WEIGHT;
 
 const TTFB_VERY_GOOD_MS   = 500;
 const TTFB_GOOD_MS        = 1000;
@@ -235,7 +238,7 @@ export function getSmartAnalyticsScore(
     ? ttfbContribution(stats.avgTtfbMs) * SMART_TTFB_FACTOR
     : 0;
   const intelligence = intelligenceContribution(intelligenceScore);
-  return bayesRate + SMART_INTELLIGENCE_WEIGHT * intelligence + speed + ttfbScore;
+  return SMART_SUCCESS_WEIGHT * bayesRate + SMART_INTELLIGENCE_WEIGHT * intelligence + speed + ttfbScore;
 }
 
 // Stochastic score used for routing — samples from the Beta posterior so that
@@ -271,7 +274,10 @@ function smartSampleScore(entry: ChainRow): number {
   const ttfbScore = stats === undefined
     ? TTFB_WEIGHT * TTFB_PRIOR * SMART_TTFB_FACTOR
     : ttfbContribution(stats.avgTtfbMs) * SMART_TTFB_FACTOR;
-  return sampleBeta(alpha, beta) + SMART_INTELLIGENCE_WEIGHT * intelligenceContribution(entry.intelligence_score) + speed + ttfbScore;
+  return SMART_SUCCESS_WEIGHT * sampleBeta(alpha, beta)
+    + SMART_INTELLIGENCE_WEIGHT * intelligenceContribution(entry.intelligence_score)
+    + speed
+    + ttfbScore;
 }
 
 /**
