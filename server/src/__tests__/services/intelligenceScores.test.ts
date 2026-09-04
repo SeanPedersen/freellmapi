@@ -77,4 +77,16 @@ describe('intelligence scores', () => {
       { model_id: 'unknown', intelligence_score: null },
     ]);
   });
+
+  it('reapplies a fresh verified cache without fetching', async () => {
+    const db = getDb();
+    db.prepare(`INSERT INTO models (platform, model_id, display_name, intelligence_rank, speed_rank) VALUES ('inceptionlabs', 'mercury-2', 'Mercury', 1, 1)`).run();
+    db.prepare('INSERT INTO modelgrep_scores (model_id, intelligence_score) VALUES (?, ?)').run('inception/mercury-2', 21.9);
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('modelgrep_scores_last_synced_at', new Date().toISOString());
+    const fetchMock = vi.spyOn(global, 'fetch');
+
+    await expect(syncIntelligenceScores()).resolves.toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT intelligence_score FROM models WHERE model_id = ?').get('mercury-2')).toEqual({ intelligence_score: 21.9 });
+  });
 });

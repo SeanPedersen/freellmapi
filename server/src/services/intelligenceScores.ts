@@ -108,7 +108,10 @@ export async function fetchModelGrepScores(): Promise<Map<string, number>> {
 
 export async function syncIntelligenceScores(force = false): Promise<boolean> {
   const lastSync = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(SYNC_SETTING_KEY) as { value: string } | undefined;
-  if (!force && lastSync && Date.now() - Date.parse(lastSync.value) < SYNC_INTERVAL_MS) return false;
+  if (!force && lastSync && Date.now() - Date.parse(lastSync.value) < SYNC_INTERVAL_MS) {
+    applyCachedIntelligenceScores();
+    return false;
+  }
   try {
     const scores = await fetchModelGrepScores();
     const db = getDb();
