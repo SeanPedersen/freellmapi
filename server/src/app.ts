@@ -50,6 +50,7 @@ function stringifyForLog(value: unknown): string {
 
 export function createApp(): Express {
   const app = express();
+  const isPlainHttpEnabled = process.env.DISABLE_HSTS === 'true';
 
   app.use((req, res, next) => {
     const start = Date.now();
@@ -83,9 +84,10 @@ export function createApp(): Express {
         connectSrc: ["'self'", ...parseAllowedOrigins()],
         objectSrc: ["'none'"],
         frameAncestors: ["'none'"],
+        upgradeInsecureRequests: isPlainHttpEnabled ? null : [],
       },
     },
-    strictTransportSecurity: process.env.DISABLE_HSTS === 'true' ? false : undefined,
+    strictTransportSecurity: isPlainHttpEnabled ? false : undefined,
   }));
   app.use(cors({
     origin(origin, callback) {
