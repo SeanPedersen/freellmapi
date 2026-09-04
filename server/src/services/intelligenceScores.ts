@@ -78,6 +78,10 @@ export async function fetchModelGrepScores(): Promise<Map<string, number>> {
     const page = await fetchPage(url);
     if (!Array.isArray(page.data) || page.data.length === 0) throw new Error('ModelGrep returned an invalid or empty page');
     for (const model of page.data) {
+      const aaScore = model.benchmarks?.artificial_analysis?.intelligence;
+      // ModelGrep's benchmarked catalog also includes models with non-AA benchmarks.
+      // They are deliberately unscored for this feature, not a malformed AA result.
+      if (aaScore === undefined || aaScore === null) continue;
       const parsed = scoreFromModel(model);
       if (!parsed) throw new Error('ModelGrep returned an invalid AA intelligence score');
       scores.set(...parsed);
@@ -88,6 +92,7 @@ export async function fetchModelGrepScores(): Promise<Map<string, number>> {
     }
     url = `${MODEL_GREP_URL}&offset=${page.meta.next_offset}`;
   }
+  if (scores.size === 0) throw new Error('ModelGrep returned no AA intelligence scores');
   return scores;
 }
 

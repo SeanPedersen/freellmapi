@@ -40,6 +40,17 @@ describe('intelligence scores', () => {
     ]);
   });
 
+  it('ignores catalog entries with no Artificial Analysis score', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue(page([
+      { id: 'other/benchmark-only', benchmarks: {} },
+      scored('google/gemini-2.5-flash', 55),
+    ]));
+
+    await expect(fetchModelGrepScores()).resolves.toEqual(new Map([
+      ['google/gemini-2.5-flash', 55],
+    ]));
+  });
+
   it('resolves canonical provider IDs and only explicit aliases', () => {
     const ids = new Set(['google/gemini-2.5-flash', 'meta/llama-3.3-70b', 'openai/gpt-oss-120b']);
     expect(resolveCanonicalModelId('google', 'gemini-2.5-flash', ids)).toBe('google/gemini-2.5-flash');
