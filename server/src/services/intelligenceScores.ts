@@ -15,9 +15,14 @@ type ModelGrepPage = {
 const EXPLICIT_ALIASES: Record<string, string> = {
   'cerebras:gpt-oss-120b': 'openai/gpt-oss-120b',
   'cerebras:gpt-oss-20b': 'openai/gpt-oss-20b',
-  'cohere:command-a-03-2025': 'cohere/command-a',
-  'inceptionlabs:mercury-2': 'inception/mercury-2',
 };
+
+const PROVIDER_PREFIXES: Record<string, string> = {
+  inceptionlabs: 'inception',
+  zhipu: 'zai',
+};
+
+const RELEASE_DATE_SUFFIX = /-\d{2}-\d{4}$/;
 
 let intervalId: ReturnType<typeof setInterval> | null = null;
 
@@ -45,9 +50,13 @@ export function resolveCanonicalModelId(platform: string, modelId: string, canon
     ? modelId.slice('@cf/'.length)
     : modelId;
   if (canonicalIds.has(normalizedId)) return normalizedId;
-  const providerPrefix = platform === 'zhipu' ? 'zai' : platform;
+  const providerPrefix = PROVIDER_PREFIXES[platform] ?? platform;
   const candidate = `${providerPrefix}/${normalizedId}`;
-  return canonicalIds.has(candidate) ? candidate : null;
+  if (canonicalIds.has(candidate)) return candidate;
+
+  const releaseName = normalizedId.replace(RELEASE_DATE_SUFFIX, '');
+  const releaseCandidate = `${providerPrefix}/${releaseName}`;
+  return releaseName !== normalizedId && canonicalIds.has(releaseCandidate) ? releaseCandidate : null;
 }
 
 function cachedScores(): Map<string, number> {

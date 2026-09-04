@@ -61,7 +61,7 @@ describe('intelligence scores', () => {
     expect(resolveCanonicalModelId('cerebras', 'gpt-oss-120b', ids)).toBe('openai/gpt-oss-120b');
     expect(resolveCanonicalModelId('cerebras', 'qwen-3.8-27b', ids)).toBe('qwen/qwen3.8-27b');
     expect(resolveCanonicalModelId('cohere', 'command-a-03-2025', ids)).toBe('cohere/command-a');
-    expect(resolveCanonicalModelId('inceptionlabs', 'mercury-2', ids)).toBe('inception/mercury-2');
+    expect(resolveCanonicalModelId('inceptionlabs', 'mercury-3', new Set(['inception/mercury-3']))).toBe('inception/mercury-3');
     expect(resolveCanonicalModelId('groq', 'almost-gpt-oss-120b', ids)).toBeNull();
   });
 
