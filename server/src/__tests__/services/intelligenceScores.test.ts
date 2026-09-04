@@ -52,10 +52,16 @@ describe('intelligence scores', () => {
   });
 
   it('resolves canonical provider IDs and only explicit aliases', () => {
-    const ids = new Set(['google/gemini-2.5-flash', 'meta/llama-3.3-70b', 'openai/gpt-oss-120b']);
+    const ids = new Set([
+      'google/gemini-2.5-flash', 'meta/llama-3.3-70b', 'openai/gpt-oss-120b',
+      'qwen/qwen3.8-27b', 'cohere/command-a', 'inception/mercury-2',
+    ]);
     expect(resolveCanonicalModelId('google', 'gemini-2.5-flash', ids)).toBe('google/gemini-2.5-flash');
     expect(resolveCanonicalModelId('cloudflare', '@cf/meta/llama-3.3-70b', ids)).toBe('meta/llama-3.3-70b');
     expect(resolveCanonicalModelId('cerebras', 'gpt-oss-120b', ids)).toBe('openai/gpt-oss-120b');
+    expect(resolveCanonicalModelId('cerebras', 'qwen-3.8-27b', ids)).toBe('qwen/qwen3.8-27b');
+    expect(resolveCanonicalModelId('cohere', 'command-a-03-2025', ids)).toBe('cohere/command-a');
+    expect(resolveCanonicalModelId('inceptionlabs', 'mercury-2', ids)).toBe('inception/mercury-2');
     expect(resolveCanonicalModelId('groq', 'almost-gpt-oss-120b', ids)).toBeNull();
   });
 

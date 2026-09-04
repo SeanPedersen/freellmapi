@@ -15,6 +15,8 @@ type ModelGrepPage = {
 const EXPLICIT_ALIASES: Record<string, string> = {
   'cerebras:gpt-oss-120b': 'openai/gpt-oss-120b',
   'cerebras:gpt-oss-20b': 'openai/gpt-oss-20b',
+  'cohere:command-a-03-2025': 'cohere/command-a',
+  'inceptionlabs:mercury-2': 'inception/mercury-2',
 };
 
 let intervalId: ReturnType<typeof setInterval> | null = null;
@@ -30,6 +32,14 @@ export function resolveCanonicalModelId(platform: string, modelId: string, canon
   if (canonicalIds.has(modelId)) return modelId;
   const alias = EXPLICIT_ALIASES[`${platform}:${modelId}`];
   if (alias && canonicalIds.has(alias)) return alias;
+
+  // Cerebras uses a hyphen after the Qwen family name while ModelGrep uses
+  // Qwen's official compact version spelling (for example qwen3.8-27b).
+  const qwenMatch = platform === 'cerebras' && /^qwen-(\d+(?:\.\d+)+-.+)$/.exec(modelId);
+  if (qwenMatch) {
+    const qwenId = `qwen/qwen${qwenMatch[1]}`;
+    if (canonicalIds.has(qwenId)) return qwenId;
+  }
 
   const normalizedId = platform === 'cloudflare' && modelId.startsWith('@cf/')
     ? modelId.slice('@cf/'.length)
