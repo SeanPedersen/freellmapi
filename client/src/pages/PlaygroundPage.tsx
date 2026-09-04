@@ -29,6 +29,10 @@ interface ChatMessage {
   meta?: MessageMeta
 }
 
+function createConversationId(): string {
+  return crypto.randomUUID()
+}
+
 function AssistantBubble({ msg, isStreaming = false }: { msg: ChatMessage; isStreaming?: boolean }) {
   return (
     <div className="bg-muted max-w-[78%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed">
@@ -76,6 +80,7 @@ export default function PlaygroundPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const conversationIdRef = useRef(createConversationId())
 
   const { data: keyData } = useQuery<{ apiKey: string }>({
     queryKey: ['unified-key'],
@@ -109,6 +114,7 @@ export default function PlaygroundPage() {
 
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      headers['X-Freellmapi-Session-Id'] = conversationIdRef.current
       if (keyData?.apiKey) headers['Authorization'] = `Bearer ${keyData.apiKey}`
 
       const body: Record<string, unknown> = {
@@ -229,6 +235,7 @@ export default function PlaygroundPage() {
   const handleClear = () => {
     abortRef.current?.abort()
     setMessages([])
+    conversationIdRef.current = createConversationId()
     setStreaming(false)
     inputRef.current?.focus()
   }

@@ -10,8 +10,8 @@ import { extractBearerToken, timingSafeStringEqual } from '../lib/secrets.js';
 
 export const proxyRouter: Router = Router();
 
-// Sticky sessions: track which model served each "session"
-// Key: hash of first user message → model_db_id
+// Sticky sessions: track which model served each client-provided session ID
+// or, for compatibility, the first user message.
 // This prevents model switching mid-conversation which causes hallucination
 const stickySessionMap = new Map<string, { modelDbId: number; lastUsed: number }>();
 const STICKY_TTL_MS = 30 * 60 * 1000; // 30 min session TTL
@@ -21,18 +21,24 @@ const RESPONSE_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_RESPONSE_SESSIONS = 500;
 const MAX_MODEL_RESPONSE_LOG_CHARS = 6000;
 
-function getSessionKey(messages: ChatMessage[], routingMode: RoutingMode): string {
+function getClientSessionId(req: Request): string | undefined {
+  const value = req.header('x-freellmapi-session-id')?.trim();
+  return value && value.length <= 128 ? value : undefined;
+}
+
+export function getSessionKey(messages: ChatMessage[], routingMode: RoutingMode, clientSessionId?: string): string {
   // Use the first user message as session identifier — clients like Hermes
   // re-send the full conversation each turn, so the first user message is
   // stable across turns. Hash the FULL message (not a 100-char slice) so
   // distinct conversations with identical openings don't collide.
   const firstUser = messages.find(m => m.role === 'user');
-  if (!firstUser || typeof firstUser.content !== 'string') return '';
-  return crypto.createHash('sha1').update(`${routingMode}:${firstUser.content}`).digest('hex');
+  const sessionValue = clientSessionId ?? (typeof firstUser?.content === 'string' ? firstUser.content : '');
+  if (!sessionValue) return '';
+  return crypto.createHash('sha1').update(`${routingMode}:${sessionValue}`).digest('hex');
 }
 
-function getStickyModel(messages: ChatMessage[], routingMode: RoutingMode): number | undefined {
-  const key = getSessionKey(messages, routingMode);
+function getStickyModel(messages: ChatMessage[], routingMode: RoutingMode, clientSessionId?: string): number | undefined {
+  const key = getSessionKey(messages, routingMode, clientSessionId);
   if (!key) return undefined;
 
   const entry = stickySessionMap.get(key);
@@ -51,16 +57,16 @@ function getStickyModel(messages: ChatMessage[], routingMode: RoutingMode): numb
   return entry.modelDbId;
 }
 
-function clearStickyModel(messages: ChatMessage[], routingMode: RoutingMode) {
-  const key = getSessionKey(messages, routingMode);
+function clearStickyModel(messages: ChatMessage[], routingMode: RoutingMode, clientSessionId?: string) {
+  const key = getSessionKey(messages, routingMode, clientSessionId);
   if (!key) return;
   if (!stickySessionMap.has(key)) return;
   stickySessionMap.delete(key);
   console.log(`[Sticky] cleared key=${key.slice(0, 8)} | msgs=${messages.length} → non-retryable error`);
 }
 
-function setStickyModel(messages: ChatMessage[], modelDbId: number, routingMode: RoutingMode) {
-  const key = getSessionKey(messages, routingMode);
+function setStickyModel(messages: ChatMessage[], modelDbId: number, routingMode: RoutingMode, clientSessionId?: string) {
+  const key = getSessionKey(messages, routingMode, clientSessionId);
   if (!key) return;
   stickySessionMap.set(key, { modelDbId, lastUsed: Date.now() });
   console.log(`[Sticky] set key=${key.slice(0, 8)} | msgs=${messages.length} → modelDbId=${modelDbId}`);
@@ -919,6 +925,7 @@ async function handleChatCompletion(
 
   const { model: rawModel, temperature, max_tokens, top_p, stream, tools, tool_choice, parallel_tool_calls } = parsed.data;
   const routingMode: RoutingMode = rawModel === AUTO_SMART_MODEL_ID ? 'smart' : 'balanced';
+  const clientSessionId = getClientSessionId(req);
   const requestedModel = rawModel === AUTO_MODEL_ID || rawModel === AUTO_SMART_MODEL_ID ? undefined : rawModel;
   const messages: ChatMessage[] = parsed.data.messages.map((m): ChatMessage => {
     if (m.role === 'assistant') {
@@ -995,7 +1002,7 @@ async function handleChatCompletion(
       return;
     }
   } else {
-    preferredModel = getStickyModel(normalizedMessages, routingMode);
+    preferredModel = getStickyModel(normalizedMessages, routingMode, clientSessionId);
   }
 
   // Retry loop: skip bad keys and, for non-rate-limit errors, skip the model
@@ -1124,7 +1131,7 @@ async function handleChatCompletion(
 
           recordTokens(route.platform, route.modelId, route.keyId, estimatedInputTokens + totalOutputTokens);
           recordSuccess(route.modelDbId);
-          setStickyModel(normalizedMessages, route.modelDbId, routingMode);
+          setStickyModel(normalizedMessages, route.modelDbId, routingMode, clientSessionId);
           logRequest(route.platform, route.modelId, 'success', estimatedInputTokens, totalOutputTokens, Date.now() - start, ttfbMs, null);
           return;
         } catch (streamErr: any) {
@@ -1171,7 +1178,7 @@ async function handleChatCompletion(
         const totalTokens = result.usage?.total_tokens ?? 0;
         recordTokens(route.platform, route.modelId, route.keyId, totalTokens);
         recordSuccess(route.modelDbId);
-        setStickyModel(normalizedMessages, route.modelDbId, routingMode);
+        setStickyModel(normalizedMessages, route.modelDbId, routingMode, clientSessionId);
 
         res.setHeader('X-Routed-Via', `${route.platform}/${route.modelId}`);
         if (attempt > 0) res.setHeader('X-Fallback-Attempts', String(attempt));
@@ -1207,7 +1214,7 @@ async function handleChatCompletion(
 
       // Non-retryable error (auth, etc.): don't retry, but clear sticky so the
       // next request in this conversation isn't pinned to the broken model.
-      clearStickyModel(normalizedMessages, routingMode);
+      clearStickyModel(normalizedMessages, routingMode, clientSessionId);
       res.status(502).json({
         error: {
           message: `Provider error (${route.displayName}): ${getErrorMessage(err)}`,
