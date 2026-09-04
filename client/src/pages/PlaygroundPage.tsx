@@ -30,7 +30,10 @@ interface ChatMessage {
 }
 
 function createConversationId(): string {
-  return crypto.randomUUID()
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `playground-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
 
 function AssistantBubble({ msg, isStreaming = false }: { msg: ChatMessage; isStreaming?: boolean }) {
