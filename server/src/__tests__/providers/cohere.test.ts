@@ -63,4 +63,22 @@ describe('CohereProvider', () => {
     vi.spyOn(global, 'fetch').mockResolvedValueOnce({ ok: true } as any);
     expect(await provider.validateKey('valid')).toBe(true);
   });
+
+  it('lists only models with Cohere chat support', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        models: [
+          { name: 'command-a', endpoints: ['chat'], context_length: 128000 },
+          { name: 'command-a-translate', endpoints: ['chat'] },
+          { name: 'command-r7b-arabic', endpoints: ['chat'] },
+          { name: 'embed-v4', endpoints: ['embed'] },
+          { name: 'rerank-v4', endpoints: ['rerank'] },
+          { name: 'transcribe', endpoints: ['transcriptions'] },
+        ],
+      }),
+    } as any);
+
+    await expect(provider.listModels('valid')).resolves.toEqual([{ id: 'command-a', contextWindow: 128000 }]);
+  });
 });

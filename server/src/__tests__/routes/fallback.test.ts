@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import type { Express } from 'express';
 import { createApp } from '../../app.js';
-import { initDb } from '../../db/index.js';
+import { initDb, getDb } from '../../db/index.js';
 
 async function request(app: Express, method: string, path: string, body?: any) {
   const server = app.listen(0);
@@ -25,6 +25,16 @@ describe('Fallback API', () => {
   beforeAll(() => {
     process.env.ENCRYPTION_KEY = '0'.repeat(64);
     initDb(':memory:');
+    const db = getDb();
+    const insert = db.prepare(`
+      INSERT INTO models (platform, model_id, display_name, intelligence_rank, speed_rank)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    insert.run('groq', 'test-fast', 'Test Fast', 100, 1);
+    insert.run('groq', 'test-smart', 'Test Smart', 1, 100);
+    const models = db.prepare('SELECT id FROM models ORDER BY id').all() as Array<{ id: number }>;
+    const fallback = db.prepare('INSERT INTO fallback_config (model_db_id, priority) VALUES (?, ?)');
+    models.forEach((model, index) => fallback.run(model.id, index + 1));
     app = createApp();
   });
 

@@ -37,14 +37,22 @@ describe('Full Integration Flow', () => {
     const db = getDb();
     db.prepare('DELETE FROM api_keys').run();
     db.prepare('DELETE FROM requests').run();
+    const insert = db.prepare(`
+      INSERT INTO models (platform, model_id, display_name, intelligence_rank, speed_rank, enabled)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insert.run('groq', 'test-fast', 'Test Fast', 100, 1, 1);
+    insert.run('groq', 'test-smart', 'Test Smart', 1, 100, 1);
+    insert.run('google', 'test-disabled', 'Test Disabled', 100, 100, 0);
+    const models = db.prepare('SELECT id FROM models ORDER BY id').all() as Array<{ id: number }>;
+    const fallback = db.prepare('INSERT INTO fallback_config (model_db_id, priority) VALUES (?, ?)');
+    models.forEach((model, index) => fallback.run(model.id, index + 1));
   });
 
-  it('Step 1: Verify models are seeded', async () => {
+  it('Step 1: Verify model fixtures are available', async () => {
     const { status, body } = await req(app, 'GET', '/api/models');
     expect(status).toBe(200);
-    // Tightened from >= 14 — current catalog post-V9 is 60+ rows; if a future
-    // migration accidentally drops a chunk we want to know.
-    expect(body.length).toBeGreaterThanOrEqual(50);
+    expect(body.length).toBe(3);
     expect(body[0]).toHaveProperty('modelId');
     expect(body[0]).toHaveProperty('hasProvider');
     // All should have providers (catches drift between catalog and providers/index.ts)
@@ -56,7 +64,7 @@ describe('Full Integration Flow', () => {
   it('Step 2: Verify fallback chain is populated', async () => {
     const { status, body } = await req(app, 'GET', '/api/fallback');
     expect(status).toBe(200);
-    expect(body.length).toBeGreaterThanOrEqual(50);
+    expect(body.length).toBe(2);
     expect(body[0]).toHaveProperty('priority');
     expect(body[0]).toHaveProperty('enabled');
   });
@@ -170,7 +178,7 @@ describe('Full Integration Flow', () => {
   it('Step 12: Explicit disabled model returns 400 with disabled reason', async () => {
     // gemini-2.5-pro is disabled (V1 migration). Reuse it as a known-disabled fixture.
     const { status, body } = await req(app, 'POST', '/v1/chat/completions', {
-      model: 'gemini-2.5-pro',
+      model: 'test-disabled',
       messages: [{ role: 'user', content: 'hi' }],
     });
     expect(status).toBe(400);

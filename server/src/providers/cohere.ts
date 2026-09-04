@@ -3,9 +3,10 @@ import type {
   ChatCompletionResponse,
   ChatCompletionChunk,
 } from '@freellmapi/shared/types.js';
-import { BaseProvider, stripAdditionalProperties, type CompletionOptions } from './base.js';
+import { BaseProvider, stripAdditionalProperties, type CompletionOptions, type DiscoveredModel } from './base.js';
 
 const API_BASE = 'https://api.cohere.ai/compatibility/v1';
+const SPECIALIZED_CHAT_MODEL_NAME = /(?:arabic|translate)/i;
 
 export class CohereProvider extends BaseProvider {
   readonly platform = 'cohere' as const;
@@ -123,5 +124,23 @@ export class CohereProvider extends BaseProvider {
       headers: { 'Authorization': `Bearer ${apiKey}` },
     }, 10000);
     return res.status !== 401 && res.status !== 403;
+  }
+
+  async listModels(apiKey: string): Promise<DiscoveredModel[]> {
+    const res = await this.fetchWithTimeout('https://api.cohere.com/v2/models', {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    }, 10000);
+    if (!res.ok) throw await this.createApiError(res);
+
+    const payload = await res.json() as { models?: Array<{ name?: unknown; endpoints?: unknown; context_length?: unknown }> };
+    return (payload.models ?? []).flatMap(model =>
+      typeof model.name === 'string' && model.name && !SPECIALIZED_CHAT_MODEL_NAME.test(model.name) && Array.isArray(model.endpoints) && model.endpoints.includes('chat')
+        ? [{
+          id: model.name,
+          contextWindow: typeof model.context_length === 'number' ? model.context_length : undefined,
+        }]
+        : [],
+    );
   }
 }

@@ -3,7 +3,7 @@ import type {
   ChatCompletionResponse,
   ChatCompletionChunk,
 } from '@freellmapi/shared/types.js';
-import { BaseProvider, type CompletionOptions } from './base.js';
+import { BaseProvider, type CompletionOptions, type DiscoveredModel } from './base.js';
 
 // Unlike every other provider, Cloudflare caps generation at 256 tokens when
 // `max_tokens` is omitted, silently returning finish_reason='length' mid-sentence.
@@ -143,5 +143,22 @@ export class CloudflareProvider extends BaseProvider {
     if (!res.ok) return true; // unexpected non-2xx that isn't auth — don't disable
     const data = await res.json() as any;
     return data.success === true && data.result?.status === 'active';
+  }
+
+  async listModels(apiKey: string): Promise<DiscoveredModel[]> {
+    const { accountId, token } = this.parseKey(apiKey);
+    const res = await this.fetchWithTimeout(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1/models`,
+      { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } },
+      10000,
+    );
+    if (!res.ok) throw await this.createApiError(res);
+
+    const payload = await res.json() as { result?: Array<{ id?: unknown; name?: unknown }> };
+    return (payload.result ?? []).flatMap(model =>
+      typeof model.id === 'string' && model.id
+        ? [{ id: model.id, displayName: typeof model.name === 'string' ? model.name : undefined }]
+        : [],
+    );
   }
 }

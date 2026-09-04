@@ -7,7 +7,7 @@ import type {
   ChatToolDefinition,
   TokenUsage,
 } from '@freellmapi/shared/types.js';
-import { BaseProvider, stripAdditionalProperties, type CompletionOptions } from './base.js';
+import { BaseProvider, stripAdditionalProperties, type CompletionOptions, type DiscoveredModel } from './base.js';
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -426,5 +426,24 @@ export class GoogleProvider extends BaseProvider {
       10000,
     );
     return res.status !== 401 && res.status !== 403;
+  }
+
+  async listModels(apiKey: string): Promise<DiscoveredModel[]> {
+    const res = await this.fetchWithTimeout(
+      `${API_BASE}/models?key=${apiKey}`,
+      { method: 'GET' },
+      10000,
+    );
+    if (!res.ok) throw await this.createApiError(res);
+
+    const payload = await res.json() as { models?: Array<{ name?: unknown; displayName?: unknown; inputTokenLimit?: unknown }> };
+    return (payload.models ?? []).flatMap(model => {
+      if (typeof model.name !== 'string' || !model.name.startsWith('models/')) return [];
+      return [{
+        id: model.name.slice('models/'.length),
+        displayName: typeof model.displayName === 'string' ? model.displayName : undefined,
+        contextWindow: typeof model.inputTokenLimit === 'number' ? model.inputTokenLimit : undefined,
+      }];
+    });
   }
 }

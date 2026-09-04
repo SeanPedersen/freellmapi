@@ -4,7 +4,7 @@ import type {
   ChatCompletionChunk,
   Platform,
 } from '@freellmapi/shared/types.js';
-import { BaseProvider, type CompletionOptions } from './base.js';
+import { BaseProvider, type CompletionOptions, type DiscoveredModel } from './base.js';
 
 /**
  * Generic provider for platforms that use an OpenAI-compatible API.
@@ -145,6 +145,47 @@ export class OpenAICompatProvider extends BaseProvider {
     }, 10000);
     return res.status !== 401 && res.status !== 403;
   }
+
+  async listModels(apiKey: string): Promise<DiscoveredModel[]> {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/models`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        ...this.extraHeaders,
+      },
+    }, 10000);
+    if (!res.ok) throw await this.createApiError(res);
+
+    const payload = await res.json() as { data?: Array<OpenAIModel> };
+    return (payload.data ?? []).flatMap(model => {
+      if (!isChatModel(model)) return [];
+      return [{
+        id: model.id,
+        displayName: typeof model.name === 'string' ? model.name : undefined,
+        contextWindow: typeof model.context_window === 'number' ? model.context_window : undefined,
+      }];
+    });
+  }
+}
+
+interface OpenAIModel {
+  id?: unknown;
+  name?: unknown;
+  context_window?: unknown;
+  input_modalities?: unknown;
+  output_modalities?: unknown;
+}
+
+const NON_CHAT_MODEL_ID = /(?:embed(?:ding)?|rerank|transcrib(?:e|er|tion)|whisper|speech|audio|tts|moderation|prompt-guard|safeguard|safety|parse|classif(?:y|ier)|detector)/i;
+
+function isChatModel(model: OpenAIModel): model is OpenAIModel & { id: string } {
+  if (typeof model.id !== 'string' || !model.id || NON_CHAT_MODEL_ID.test(model.id)) return false;
+
+  const inputModalities = Array.isArray(model.input_modalities) ? model.input_modalities : null;
+  const outputModalities = Array.isArray(model.output_modalities) ? model.output_modalities : null;
+  if (inputModalities && !inputModalities.includes('text')) return false;
+  if (outputModalities && !outputModalities.includes('text')) return false;
+  return true;
 }
 
 /**

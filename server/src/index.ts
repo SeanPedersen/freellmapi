@@ -3,6 +3,7 @@ import { createApp } from './app.js';
 import { initDb } from './db/index.js';
 import { assertAdminAuthConfigured } from './middleware/adminAuth.js';
 import { startHealthChecker } from './services/health.js';
+import { startModelDiscovery } from './services/modelDiscovery.js';
 
 const PORT = process.env.PORT ?? 3001;
 
@@ -15,6 +16,7 @@ async function main() {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
     console.log(`Proxy endpoint: http://0.0.0.0:${PORT}/v1/chat/completions`);
     startHealthChecker();
+    startModelDiscovery();
   });
 
   const shutdown = () => { server.close(() => process.exit(0)); };

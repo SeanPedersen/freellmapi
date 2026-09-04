@@ -18,6 +18,22 @@ describe('OpenAICompatProvider', () => {
     expect(provider.name).toBe('TestProvider');
   });
 
+  it('lists only text chat models', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        data: [
+          { id: 'general-chat', input_modalities: ['text'], output_modalities: ['text'] },
+          { id: 'whisper-large', input_modalities: ['audio'], output_modalities: ['transcription'] },
+          { id: 'prompt-guard', input_modalities: ['text'], output_modalities: ['text'] },
+          { id: 'text-embedding-3-small' },
+        ],
+      }),
+    } as any);
+
+    await expect(provider.listModels('my-key')).resolves.toEqual([{ id: 'general-chat', displayName: undefined, contextWindow: undefined }]);
+  });
+
   it('should call API with correct URL and headers', async () => {
     let capturedUrl = '';
     let capturedHeaders: Record<string, string> = {};

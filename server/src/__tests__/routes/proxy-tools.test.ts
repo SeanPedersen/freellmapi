@@ -32,6 +32,16 @@ describe('Proxy tool-calling support', () => {
   beforeAll(() => {
     process.env.ENCRYPTION_KEY = '0'.repeat(64);
     initDb(':memory:');
+    const db = getDb();
+    const insert = db.prepare(`
+      INSERT INTO models (platform, model_id, display_name, intelligence_rank, speed_rank)
+      VALUES ('groq', ?, ?, 100, 100)
+    `);
+    insert.run('test-model-a', 'Test model A');
+    insert.run('test-model-b', 'Test model B');
+    const models = db.prepare("SELECT id FROM models WHERE platform = 'groq' ORDER BY id").all() as Array<{ id: number }>;
+    const fallback = db.prepare('INSERT INTO fallback_config (model_db_id, priority) VALUES (?, ?)');
+    models.forEach((model, index) => fallback.run(model.id, index + 1));
     app = createApp();
   });
 

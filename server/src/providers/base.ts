@@ -17,6 +17,12 @@ export interface CompletionOptions {
   parallel_tool_calls?: boolean;
 }
 
+export interface DiscoveredModel {
+  id: string;
+  displayName?: string;
+  contextWindow?: number;
+}
+
 // Bounds a whole non-streaming generation (for streams it only bounds time to
 // response headers). A full-length completion routinely runs 20-30s, so this
 // must stay well clear of that — a tighter bound aborts good responses rather
@@ -71,6 +77,8 @@ export abstract class BaseProvider {
   ): AsyncGenerator<ChatCompletionChunk>;
 
   abstract validateKey(apiKey: string): Promise<boolean>;
+
+  abstract listModels(apiKey: string): Promise<DiscoveredModel[]>;
 
   protected async fetchWithTimeout(
     url: string,

@@ -12,6 +12,12 @@ describe('Router', () => {
   beforeEach(() => {
     const db = getDb();
     db.prepare('DELETE FROM api_keys').run();
+    db.prepare(`
+      INSERT OR IGNORE INTO models (platform, model_id, display_name, intelligence_rank, speed_rank)
+      VALUES ('groq', 'test-model', 'Test model', 100, 100)
+    `).run();
+    const model = db.prepare("SELECT id FROM models WHERE platform = 'groq' AND model_id = 'test-model'").get() as { id: number };
+    db.prepare('INSERT OR IGNORE INTO fallback_config (model_db_id, priority) VALUES (?, 1)').run(model.id);
     // Reset fallback order to intelligence ranking
     const models = db.prepare('SELECT id, intelligence_rank FROM models ORDER BY intelligence_rank ASC').all() as any[];
     const update = db.prepare('UPDATE fallback_config SET priority = ? WHERE model_db_id = ?');
