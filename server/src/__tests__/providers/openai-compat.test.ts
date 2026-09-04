@@ -34,6 +34,23 @@ describe('OpenAICompatProvider', () => {
     await expect(provider.listModels('my-key')).resolves.toEqual([{ id: 'general-chat', displayName: undefined, contextWindow: undefined }]);
   });
 
+  it('limits discovered models to an allowlist when configured', async () => {
+    const restrictedProvider = new OpenAICompatProvider({
+      platform: 'opencode',
+      name: 'OpenCode Zen',
+      baseUrl: 'https://opencode.ai/zen/v1',
+      allowedModelIds: ['big-pickle'],
+    });
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ data: [{ id: 'big-pickle' }, { id: 'paid-model' }] }),
+    } as any);
+
+    await expect(restrictedProvider.listModels('my-key')).resolves.toEqual([
+      { id: 'big-pickle', displayName: undefined, contextWindow: undefined },
+    ]);
+  });
+
   it('should call API with correct URL and headers', async () => {
     let capturedUrl = '';
     let capturedHeaders: Record<string, string> = {};
@@ -263,6 +280,7 @@ describe('OpenAICompatProvider - platform instances', () => {
     { platform: 'openrouter', name: 'OpenRouter',    baseUrl: 'https://openrouter.ai/api/v1' },
     { platform: 'github',     name: 'GitHub Models', baseUrl: 'https://models.github.ai/inference' },
     { platform: 'zhipu',      name: 'Zhipu AI',      baseUrl: 'https://open.bigmodel.cn/api/paas/v4' },
+    { platform: 'opencode',   name: 'OpenCode Zen',  baseUrl: 'https://opencode.ai/zen/v1' },
   ] as const;
 
   for (const p of platforms) {

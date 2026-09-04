@@ -17,6 +17,7 @@ export class OpenAICompatProvider extends BaseProvider {
   private readonly baseUrl: string;
   private readonly extraHeaders: Record<string, string>;
   private readonly validateUrl?: string;
+  private readonly allowedModelIds?: ReadonlySet<string>;
   /** Per-provider HTTP timeout override. Cloud APIs finish in ~15s; locally-hosted
    * inference (llama.cpp / vLLM on CPU) can take 30-120s for long prompts. Default 15000. */
   private readonly timeoutMs: number;
@@ -28,6 +29,7 @@ export class OpenAICompatProvider extends BaseProvider {
     extraHeaders?: Record<string, string>;
     validateUrl?: string;
     timeoutMs?: number;
+    allowedModelIds?: readonly string[];
   }) {
     super();
     this.platform = opts.platform;
@@ -35,6 +37,7 @@ export class OpenAICompatProvider extends BaseProvider {
     this.baseUrl = opts.baseUrl;
     this.extraHeaders = opts.extraHeaders ?? {};
     this.validateUrl = opts.validateUrl;
+    this.allowedModelIds = opts.allowedModelIds ? new Set(opts.allowedModelIds) : undefined;
     this.timeoutMs = opts.timeoutMs ?? 15000;
   }
 
@@ -159,6 +162,7 @@ export class OpenAICompatProvider extends BaseProvider {
     const payload = await res.json() as { data?: Array<OpenAIModel> };
     return (payload.data ?? []).flatMap(model => {
       if (!isChatModel(model)) return [];
+      if (this.allowedModelIds && !this.allowedModelIds.has(model.id)) return [];
       return [{
         id: model.id,
         displayName: typeof model.name === 'string' ? model.name : undefined,

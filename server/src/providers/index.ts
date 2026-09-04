@@ -4,6 +4,7 @@ import { GoogleProvider } from './google.js';
 import { OpenAICompatProvider } from './openai-compat.js';
 import { CohereProvider } from './cohere.js';
 import { CloudflareProvider } from './cloudflare.js';
+import { OPENCODE_FREE_CHAT_MODEL_IDS } from './opencode.js';
 
 const providers = new Map<Platform, BaseProvider>();
 
@@ -101,6 +102,15 @@ register(new OpenAICompatProvider({
   name: 'Ollama Cloud',
   baseUrl: 'https://ollama.com/v1',
   timeoutMs: 120000,
+}));
+
+// OpenCode Zen is OpenAI-compatible. Only its documented free Chat Completions
+// models are synchronized, preventing paid Zen models from joining auto-routing.
+register(new OpenAICompatProvider({
+  platform: 'opencode',
+  name: 'OpenCode Zen',
+  baseUrl: 'https://opencode.ai/zen/v1',
+  allowedModelIds: OPENCODE_FREE_CHAT_MODEL_IDS,
 }));
 
 // Kilo AI Gateway — OpenAI-compatible aggregator. Anonymous access works

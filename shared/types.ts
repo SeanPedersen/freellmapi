@@ -20,7 +20,8 @@ export type Platform =
   | 'kilo'
   | 'pollinations'
   | 'llm7'
-  | 'inceptionlabs';
+  | 'inceptionlabs'
+  | 'opencode';
 
 export interface Model {
   id: number;

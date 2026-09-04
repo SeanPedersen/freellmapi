@@ -25,6 +25,7 @@ const PLATFORMS: { value: Platform; label: string; keyUrl?: string }[] = [
   { value: 'pollinations', label: 'Pollinations (anon ok)' },
   { value: 'llm7', label: 'LLM7 (anon ok)' },
   { value: 'inceptionlabs', label: 'InceptionLabs', keyUrl: 'https://platform.inceptionlabs.ai/dashboard/api-keys' },
+  { value: 'opencode', label: 'OpenCode Zen (free models)', keyUrl: 'https://opencode.ai/auth' },
 ]
 
 const statusDot: Record<string, string> = {
