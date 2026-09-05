@@ -51,6 +51,30 @@ describe('OpenAICompatProvider', () => {
     ]);
   });
 
+  it('limits discovered models to IDs matching a configured pattern', async () => {
+    const restrictedProvider = new OpenAICompatProvider({
+      platform: 'openrouter',
+      name: 'OpenRouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      allowedModelIdPattern: /free/i,
+    });
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        data: [
+          { id: 'meta-llama/llama-3.3-70b-instruct:free' },
+          { id: 'openai/gpt-5' },
+          { id: 'acme/FREE-model' },
+        ],
+      }),
+    } as any);
+
+    await expect(restrictedProvider.listModels('my-key')).resolves.toEqual([
+      { id: 'meta-llama/llama-3.3-70b-instruct:free', displayName: undefined, contextWindow: undefined },
+      { id: 'acme/FREE-model', displayName: undefined, contextWindow: undefined },
+    ]);
+  });
+
   it('should call API with correct URL and headers', async () => {
     let capturedUrl = '';
     let capturedHeaders: Record<string, string> = {};

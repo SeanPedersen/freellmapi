@@ -50,11 +50,13 @@ register(new OpenAICompatProvider({
   baseUrl: 'https://api.mistral.ai/v1',
 }));
 
-// OpenRouter - OpenAI-compatible with extra headers
+// OpenRouter's /models endpoint contains paid and free routes. Free routes are
+// identified dynamically by their `:free` model IDs, avoiding a hardcoded catalog.
 register(new OpenAICompatProvider({
   platform: 'openrouter',
   name: 'OpenRouter',
   baseUrl: 'https://openrouter.ai/api/v1',
+  allowedModelIdPattern: /free/i,
   extraHeaders: {
     'HTTP-Referer': 'http://localhost:3001',
     'X-Title': 'FreeLLMAPI',
