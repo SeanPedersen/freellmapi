@@ -4,6 +4,7 @@ import { GoogleProvider } from './google.js';
 import { OpenAICompatProvider } from './openai-compat.js';
 import { CohereProvider } from './cohere.js';
 import { CloudflareProvider } from './cloudflare.js';
+import { NVIDIA_FREE_CHAT_MODEL_IDS } from './nvidia.js';
 import { OPENCODE_FREE_CHAT_MODEL_IDS } from './opencode.js';
 
 const providers = new Map<Platform, BaseProvider>();
@@ -36,13 +37,13 @@ register(new OpenAICompatProvider({
   baseUrl: 'https://api.sambanova.ai/v1',
 }));
 
-// NVIDIA NIM's API catalog is credit-based rather than a recurring free tier.
-// Keep the provider for key validation, but exclude its models from free routing.
+// NVIDIA's /models response does not identify pricing. Limit discovery to its
+// currently available Build Free Endpoint chat routes, rather than all models.
 register(new OpenAICompatProvider({
   platform: 'nvidia',
   name: 'NVIDIA NIM',
   baseUrl: 'https://integrate.api.nvidia.com/v1',
-  allowedModelIds: [],
+  allowedModelIds: NVIDIA_FREE_CHAT_MODEL_IDS,
 }));
 
 // Mistral - OpenAI-compatible
