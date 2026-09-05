@@ -36,11 +36,13 @@ register(new OpenAICompatProvider({
   baseUrl: 'https://api.sambanova.ai/v1',
 }));
 
-// NVIDIA NIM - OpenAI-compatible
+// NVIDIA NIM's API catalog is credit-based rather than a recurring free tier.
+// Keep the provider for key validation, but exclude its models from free routing.
 register(new OpenAICompatProvider({
   platform: 'nvidia',
   name: 'NVIDIA NIM',
   baseUrl: 'https://integrate.api.nvidia.com/v1',
+  allowedModelIds: [],
 }));
 
 // Mistral - OpenAI-compatible

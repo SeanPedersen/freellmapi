@@ -51,6 +51,21 @@ describe('OpenAICompatProvider', () => {
     ]);
   });
 
+  it('can exclude a provider catalog with an empty allowlist', async () => {
+    const restrictedProvider = new OpenAICompatProvider({
+      platform: 'nvidia',
+      name: 'NVIDIA NIM',
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+      allowedModelIds: [],
+    });
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ data: [{ id: 'meta/llama-3.3-70b-instruct' }] }),
+    } as any);
+
+    await expect(restrictedProvider.listModels('my-key')).resolves.toEqual([]);
+  });
+
   it('limits discovered models to IDs matching a configured pattern', async () => {
     const restrictedProvider = new OpenAICompatProvider({
       platform: 'openrouter',

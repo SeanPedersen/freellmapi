@@ -8,7 +8,7 @@ import { initEncryptionKey } from '../lib/crypto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.resolve(__dirname, '../../data/freeapi.db');
-const MODEL_DISCOVERY_FILTER_VERSION = 'chat-only-v2';
+const MODEL_DISCOVERY_FILTER_VERSION = 'free-catalog-v1';
 
 let db: Database.Database;
 
@@ -29,6 +29,7 @@ export function initDb(dbPath?: string): Database.Database {
   createTables(db);
   migrateIntelligenceScores(db);
   disableLegacyCatalog(db);
+  disableCreditBasedProviderCatalogs(db);
   invalidateChangedModelDiscovery(db);
   migrateRequestMetrics(db);
   initEncryptionKey(db);
@@ -135,6 +136,19 @@ function disableLegacyCatalog(db: Database.Database): void {
   // A successful provider sync re-enables only models the provider currently lists.
   db.prepare('UPDATE models SET enabled = 0').run();
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(migrationKey, 'complete');
+}
+
+function disableCreditBasedProviderCatalogs(db: Database.Database): void {
+  const migrationKey = 'disabled_nvidia_credit_catalog_v1';
+  const migrated = db.prepare('SELECT 1 FROM settings WHERE key = ?').get(migrationKey);
+  if (migrated) return;
+
+  // NVIDIA's API lists credit-based routes alongside any trial access. They are
+  // not a recurring free tier, so exclude them from the free fallback catalog.
+  db.transaction(() => {
+    db.prepare("UPDATE models SET enabled = 0 WHERE platform = 'nvidia'").run();
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(migrationKey, 'complete');
+  })();
 }
 
 function invalidateChangedModelDiscovery(db: Database.Database): void {
